@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <unordered_map>
 
 #include "retdec/llvmir2hll/support/smart_ptr.h"
 #include "retdec/llvmir2hll/support/types.h"
@@ -85,6 +86,11 @@ public:
 	bool funcExists(ShPtr<Function> func) const;
 	ShPtr<Function> getFuncByName(const std::string &funcName) const;
 	bool hasFuncWithName(const std::string &funcName) const;
+
+	/// Tells the module that a function was renamed behind its back (through
+	/// Function::setName()), so the getFuncByName() lookup table must be
+	/// rebuilt. Safe to call at any time.
+	void invalidateFuncsByNameCache() const;
 	bool correspondsToFunc(ShPtr<Variable> var) const;
 	bool hasMainFunc() const;
 	bool isMainFunc(ShPtr<Function> func) const;
@@ -183,6 +189,9 @@ private:
 	/// Mapping of a function into an address range.
 	using FuncAddressRangeMap = std::map<ShPtr<Function>, AddressRange>;
 
+	/// Mapping of a function name into the function itself.
+	using FuncByNameMap = std::unordered_map<std::string, ShPtr<Function>>;
+
 private:
 	/// Original module from which this module has been created.
 	const llvm::Module *llvmModule;
@@ -204,6 +213,21 @@ private:
 
 	/// Mapping of a variable into its name in the debug information.
 	VarStringMap debugVarNameMap;
+
+	/// Cache for getFuncByName(), which is a hot path: several backend phases
+	/// resolve a called function by name for every call site, and a linear
+	/// scan over the function list makes that quadratic (on Vanguard binaries
+	/// the module holds >180k functions).
+	///
+	/// Staleness is detected through Function's global rename counter, so the
+	/// lookup stays correct even when a function is renamed directly via
+	/// Function::setName() without the module being notified.
+	mutable FuncByNameMap funcsByNameCache;
+	mutable bool funcsByNameCacheValid = false;
+	/// Value of Function::getRenameCounter() when the cache was built.
+	mutable std::size_t funcsByNameCacheRenames = 0;
+
+	void rebuildFuncsByNameCache() const;
 
 private:
 	bool hasFuncSatisfyingPredicate(

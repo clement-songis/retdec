@@ -306,8 +306,23 @@ void Function::setRetType(ShPtr<Type> newRetType) {
 /**
 * @brief Sets a new name.
 */
+namespace {
+
+/// Bumped by every Function::setName() call; see getRenameCounter().
+std::size_t functionRenameCounter = 0;
+
+} // anonymous namespace
+
 void Function::setName(const std::string &newName) {
+	++functionRenameCounter;
 	funcVar->setName(newName);
+}
+
+/**
+* @brief Returns the number of function renames performed so far.
+*/
+std::size_t Function::getRenameCounter() {
+	return functionRenameCounter;
 }
 
 /**

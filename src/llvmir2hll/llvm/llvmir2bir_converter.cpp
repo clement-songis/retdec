@@ -305,6 +305,10 @@ void LLVMIR2BIRConverter::makeFuncsIdentifiersValid() {
 */
 void LLVMIR2BIRConverter::makeFuncIdentifiersValid(ShPtr<Function> func) const {
 	func->setName(makeIdentifierValid(func->getName()));
+	// Renaming through the function object bypasses the module's name index.
+	if (resModule) {
+		resModule->invalidateFuncsByNameCache();
+	}
 	makeFuncVariablesValid(func);
 }
 

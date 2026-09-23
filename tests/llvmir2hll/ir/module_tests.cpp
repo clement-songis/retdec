@@ -891,6 +891,83 @@ GetDetectedCompilerOrPackerReturnsCorrectValue) {
 }
 
 //
+// getFuncByName() / hasFuncWithName()
+//
+// These also cover the name -> function cache backing getFuncByName(): the
+// lookup must stay correct across additions, removals and renames.
+//
+
+TEST_F(ModuleTests,
+GetFuncByNameReturnsCorrectFunction) {
+	auto func1 = addFuncDef("func1");
+	auto func2 = addFuncDef("func2");
+
+	ASSERT_EQ(func1, module->getFuncByName("func1"));
+	ASSERT_EQ(func2, module->getFuncByName("func2"));
+	ASSERT_EQ(ShPtr<Function>(), module->getFuncByName("nonexisting"));
+	ASSERT_TRUE(module->hasFuncWithName("func1"));
+	ASSERT_FALSE(module->hasFuncWithName("nonexisting"));
+}
+
+TEST_F(ModuleTests,
+GetFuncByNameIsStableWhenCalledRepeatedly) {
+	auto func = addFuncDef("func");
+
+	// Exercises the cached path: the second call must not differ.
+	ASSERT_EQ(func, module->getFuncByName("func"));
+	ASSERT_EQ(func, module->getFuncByName("func"));
+	ASSERT_EQ(ShPtr<Function>(), module->getFuncByName("other"));
+	ASSERT_EQ(ShPtr<Function>(), module->getFuncByName("other"));
+}
+
+TEST_F(ModuleTests,
+GetFuncByNameSeesFunctionAddedAfterAPreviousLookup) {
+	// A negative lookup must not be cached in a way that hides a later add.
+	ASSERT_EQ(ShPtr<Function>(), module->getFuncByName("late"));
+
+	auto late = addFuncDef("late");
+
+	ASSERT_EQ(late, module->getFuncByName("late"));
+}
+
+TEST_F(ModuleTests,
+GetFuncByNameDoesNotSeeRemovedFunction) {
+	auto func = addFuncDef("doomed");
+	ASSERT_EQ(func, module->getFuncByName("doomed"));
+
+	module->removeFunc(func);
+
+	ASSERT_EQ(ShPtr<Function>(), module->getFuncByName("doomed"));
+	ASSERT_FALSE(module->hasFuncWithName("doomed"));
+}
+
+TEST_F(ModuleTests,
+GetFuncByNameIsCorrectAfterFunctionIsRenamedBehindTheModulesBack) {
+	auto func = addFuncDef("oldName");
+	// Warm the cache with the old name.
+	ASSERT_EQ(func, module->getFuncByName("oldName"));
+
+	// Function::setName() does not notify the module. The lookup must still
+	// not hand out a function whose name no longer matches.
+	func->setName("newName");
+
+	ASSERT_EQ(ShPtr<Function>(), module->getFuncByName("oldName"));
+	ASSERT_EQ(func, module->getFuncByName("newName"));
+}
+
+TEST_F(ModuleTests,
+GetFuncByNameIsCorrectAfterExplicitCacheInvalidation) {
+	auto func = addFuncDef("oldName");
+	ASSERT_EQ(func, module->getFuncByName("oldName"));
+
+	func->setName("newName");
+	module->invalidateFuncsByNameCache();
+
+	ASSERT_EQ(func, module->getFuncByName("newName"));
+	ASSERT_EQ(ShPtr<Function>(), module->getFuncByName("oldName"));
+}
+
+//
 // getDetectedLanguage()
 //
 

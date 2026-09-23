@@ -269,6 +269,7 @@ Module::global_var_iterator Module::global_var_end() const {
 void Module::addFunc(ShPtr<Function> func) {
 	if (!hasItem(funcs, func)) {
 		funcs.push_back(func);
+		invalidateFuncsByNameCache();
 	}
 }
 
@@ -279,6 +280,7 @@ void Module::addFunc(ShPtr<Function> func) {
 */
 void Module::removeFunc(ShPtr<Function> func) {
 	removeItem(funcs, func);
+	invalidateFuncsByNameCache();
 }
 
 /**
@@ -320,12 +322,44 @@ bool Module::isMainFunc(ShPtr<Function> func) const {
 * If there is no function named @a funcName, it returns the null pointer.
 */
 ShPtr<Function> Module::getFuncByName(const std::string &funcName) const {
-	for (const auto &func : funcs) {
-		if (func->getName() == funcName) {
-			return func;
-		}
+	// A linear scan here is quadratic overall: the backend resolves the callee
+	// of every call site by name, and large binaries hold >180k functions.
+	//
+	// Correctness relies on the global rename counter rather than on callers
+	// remembering to invalidate: any Function::setName() anywhere bumps it, so
+	// a stale cache is always detected -- including the case where a rename
+	// turns a hit into a miss, which a per-entry name check alone would miss.
+	auto renames = Function::getRenameCounter();
+	if (!funcsByNameCacheValid || funcsByNameCacheRenames != renames) {
+		rebuildFuncsByNameCache();
 	}
-	return ShPtr<Function>();
+
+	auto it = funcsByNameCache.find(funcName);
+	return it != funcsByNameCache.end() ? it->second : ShPtr<Function>();
+}
+
+/**
+* @brief Rebuilds the name -> function lookup table.
+*
+* The first function wins on duplicate names, which matches the behaviour of
+* the original linear scan over @c funcs.
+*/
+void Module::rebuildFuncsByNameCache() const {
+	funcsByNameCache.clear();
+	funcsByNameCache.reserve(funcs.size());
+	for (const auto &func : funcs) {
+		funcsByNameCache.emplace(func->getName(), func);
+	}
+	funcsByNameCacheRenames = Function::getRenameCounter();
+	funcsByNameCacheValid = true;
+}
+
+/**
+* @brief Marks the name -> function lookup table as out of date.
+*/
+void Module::invalidateFuncsByNameCache() const {
+	funcsByNameCache.clear();
+	funcsByNameCacheValid = false;
 }
 
 /**

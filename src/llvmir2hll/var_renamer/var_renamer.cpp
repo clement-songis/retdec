@@ -321,6 +321,12 @@ void VarRenamer::assignNameToFunc(ShPtr<Function> func, const std::string &name)
 	renamedVars.insert(func->getAsVar());
 	funcsByName.erase(origName);
 	funcsByName[newName] = func;
+
+	// The module keeps its own name -> function index; the rename above went
+	// through the function object, so that index is now stale.
+	if (module) {
+		module->invalidateFuncsByNameCache();
+	}
 }
 
 /**

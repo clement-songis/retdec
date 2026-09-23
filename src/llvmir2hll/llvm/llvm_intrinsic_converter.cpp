@@ -184,6 +184,11 @@ void LLVMIntrinsicConverter::convertIntrinsicFuncName(ShPtr<Function> func) {
 void LLVMIntrinsicConverter::renameIntrinsicFunc(ShPtr<Function> func,
 		const std::string &newName) {
 	func->setName(newName);
+	// The module indexes functions by name; the rename happened on the
+	// function object, so the index has to be dropped.
+	if (module) {
+		module->invalidateFuncsByNameCache();
+	}
 	renamedFuncNames.insert(newName);
 }
 

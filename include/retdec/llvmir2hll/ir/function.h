@@ -66,6 +66,12 @@ public:
 
 	void setRetType(ShPtr<Type> newRetType);
 	void setName(const std::string &newName);
+
+	/// Counts every function rename in the process. Callers that cache
+	/// lookups by function name (Module::getFuncByName()) snapshot this and
+	/// rebuild when it moves, so a rename can never be missed even if the
+	/// renaming code forgets to notify anyone.
+	static std::size_t getRenameCounter();
 	void setParams(VarVector newParams);
 	void setLocalVars(VarSet newLocalVars);
 	void addParam(ShPtr<Variable> var);

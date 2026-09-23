@@ -77,6 +77,14 @@ class ProgramOptions
 		bool cleanup = false;
 		std::set<std::string> toClean;
 
+		/// Skip generation of the side outputs. They are written for the whole
+		/// input file, so on a large binary they can cost far more time and
+		/// disk space than the requested C output itself.
+		bool noDsm = false;
+		bool noLl = false;
+		bool noBc = false;
+		bool noConfigOut = false;
+
 	public:
 		ProgramOptions(
 				int argc,
@@ -314,6 +322,23 @@ void ProgramOptions::loadOption(std::list<std::string>::iterator& i)
 	{
 		params.setIsKeepAllFunctions(true);
 	}
+	else if (isParam(i, "", "--no-dsm"))
+	{
+		// An empty path makes DsmWriter skip the whole pass.
+		noDsm = true;
+	}
+	else if (isParam(i, "", "--no-ll"))
+	{
+		noLl = true;
+	}
+	else if (isParam(i, "", "--no-bc"))
+	{
+		noBc = true;
+	}
+	else if (isParam(i, "", "--no-config-out"))
+	{
+		noConfigOut = true;
+	}
 	else if (isParam(i, "-p", "--pdb"))
 	{
 		std::string pdb = checkFile(getParamOrDie(i), "[-p|--pdb]");
@@ -545,6 +570,18 @@ void ProgramOptions::afterLoad()
 		params.setOutputLlvmirFile(in + ".ll");
 	if (params.getOutputConfigFile().empty())
 		params.setOutputConfigFile(in + ".config.json");
+
+	// Must run after the defaults above, otherwise they would resurrect the
+	// outputs the user just disabled. The writer passes treat an empty path
+	// as "nothing to do".
+	if (noDsm)
+		params.setOutputAsmFile("");
+	if (noBc)
+		params.setOutputBitcodeFile("");
+	if (noLl)
+		params.setOutputLlvmirFile("");
+	if (noConfigOut)
+		params.setOutputConfigFile("");
 	if (params.getOutputFile().empty())
 	{
 		if (params.getOutputFormat() == "plain")
@@ -622,6 +659,13 @@ General arguments:
 	[-m|--mode MODE] Force the type of decompilation mode [bin|raw] (default: bin).
 	[-p|--pdb FILE] File with PDB debug information.
 	[-k|--keep-unreachable-funcs] Keep functions that are unreachable from the main function.
+	[--no-dsm] Do not generate the .dsm disassembly file.
+	[--no-ll] Do not generate the .ll LLVM IR file.
+	[--no-bc] Do not generate the .bc LLVM bitcode file.
+	[--no-config-out] Do not generate the .config.json file.
+	                  These four side outputs cover the WHOLE input file even
+	                  with --select-ranges, so disabling them can save most of
+	                  the run time and disk space on large binaries.
 	[--cleanup] Removes temporary files created during the decompilation.
 	[--config] Specify JSON decompilation configuration file.
 	[--disable-static-code-detection] Prevents detection of statically linked code.

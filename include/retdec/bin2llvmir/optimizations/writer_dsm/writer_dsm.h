@@ -8,6 +8,7 @@
 #define RETDEC_BIN2LLVMIR_OPTIMIZATIONS_WRITER_DSM_WRITER_DSM_H
 
 #include <ostream>
+#include <vector>
 
 #include <llvm/IR/Module.h>
 #include <llvm/Pass.h>
@@ -40,6 +41,24 @@ class DsmWriter : public llvm::ModulePass
 		void generateCodeSeg(
 				const retdec::loader::Segment* seg,
 				std::ostream& ret);
+		void generateCodeRange(
+				retdec::common::Address start,
+				retdec::common::Address end,
+				std::ostream& ret);
+
+		/// @return @c true if the DSM output must be limited to the ranges
+		///         selected by the user (@c --select-ranges together with
+		///         @c --select-decode-only). Without this, the writer dumps
+		///         every code and data segment of the whole input file, which
+		///         dominates the run time on large binaries.
+		bool isRestrictedToSelectedRanges() const;
+
+		/// Intersect [@p start, @p end) with the user selected ranges.
+		/// @return The sub-ranges to emit, in ascending order. When the output
+		///         is not restricted, the input range is returned unchanged.
+		std::vector<retdec::common::AddressRange> rangesToEmit(
+				retdec::common::Address start,
+				retdec::common::Address end) const;
 		void generateFunction(
 				const retdec::common::Function* fnc,
 				std::ostream& ret);

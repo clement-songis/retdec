@@ -121,6 +121,48 @@ void DsmWriter::generateHeader(std::ostream& ret)
 	ret << ";;\n";
 }
 
+/**
+ * The DSM writer walks every code and data segment of the input file. On a
+ * large binary this dominates the run time even when the user asked for a tiny
+ * range: for a 4 KB range of the 72 MB vgk.sys, emitting the full 380 MB .dsm
+ * took 34 s out of 48 s total. When the user explicitly restricted the
+ * decompilation with --select-ranges + --select-decode-only, only those ranges
+ * carry decoded instructions, so everything else is a hexdump nobody asked for.
+ */
+bool DsmWriter::isRestrictedToSelectedRanges() const
+{
+	const auto& params = _config->getConfig().parameters;
+	return params.isSelectedDecodeOnly() && !params.selectedRanges.empty();
+}
+
+std::vector<AddressRange> DsmWriter::rangesToEmit(
+		Address start,
+		Address end) const
+{
+	std::vector<AddressRange> res;
+	if (start >= end)
+	{
+		return res;
+	}
+	if (!isRestrictedToSelectedRanges())
+	{
+		res.emplace_back(start, end);
+		return res;
+	}
+
+	for (auto& sel : _config->getConfig().parameters.selectedRanges)
+	{
+		// AddressRange is inclusive on both ends, our [start, end) is not.
+		Address s = std::max(start, sel.getStart());
+		Address e = std::min(end, Address(sel.getEnd() + 1));
+		if (s < e)
+		{
+			res.emplace_back(s, e);
+		}
+	}
+	return res;
+}
+
 void DsmWriter::generateCode(std::ostream& ret)
 {
 	ret << "\n";
@@ -154,10 +196,27 @@ void DsmWriter::generateCodeSeg(
 		const retdec::loader::Segment* seg,
 		std::ostream& ret)
 {
+	auto parts = rangesToEmit(seg->getAddress(), seg->getEndAddress());
+	if (parts.empty())
+	{
+		return;
+	}
+
 	ret << "; section: " << seg->getName() << "\n";
 
+	for (auto& p : parts)
+	{
+		generateCodeRange(p.getStart(), p.getEnd(), ret);
+	}
+}
+
+void DsmWriter::generateCodeRange(
+		Address rangeStart,
+		Address rangeEnd,
+		std::ostream& ret)
+{
 	Address addr;
-	for (addr = seg->getAddress(); addr < seg->getEndAddress(); )
+	for (addr = rangeStart; addr < rangeEnd; )
 	{
 		auto fIt = _addr2fnc.find(addr);
 		auto* f = fIt != _addr2fnc.end() ? fIt->second : nullptr;
@@ -169,7 +228,7 @@ void DsmWriter::generateCodeSeg(
 		}
 
 		Address nextFncAddr = addr;
-		while (nextFncAddr < seg->getEndAddress())
+		while (nextFncAddr < rangeEnd)
 		{
 			if (_addr2fnc.count(nextFncAddr))
 			{
@@ -426,8 +485,17 @@ void DsmWriter::generateDataSeg(
 		const retdec::loader::Segment* seg,
 		std::ostream& ret)
 {
+	auto parts = rangesToEmit(seg->getAddress(), seg->getEndAddress() + 1);
+	if (parts.empty())
+	{
+		return;
+	}
+
 	ret << "; section: " << seg->getName() << "\n";
-	generateDataRange(seg->getAddress(), seg->getEndAddress() + 1, ret);
+	for (auto& p : parts)
+	{
+		generateDataRange(p.getStart(), p.getEnd(), ret);
+	}
 }
 
 void DsmWriter::generateDataRange(

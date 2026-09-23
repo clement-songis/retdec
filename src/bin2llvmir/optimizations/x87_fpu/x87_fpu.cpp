@@ -223,6 +223,38 @@ bool X87FpuAnalysis::run()
 
 	for (auto& funMd: analyzedFunctionsMetadata)
 	{
+		// initSystem() allocates a DENSE Eigen matrix of
+		// (blocks + edges) x (2 * blocks) doubles for this single function,
+		// so the cost is quadratic in the block count. Obfuscated code can
+		// produce functions with tens of thousands of basic blocks, where
+		// that allocation alone reaches tens of gigabytes and gets the
+		// process OOM-killed:
+		//
+		//     1 000 blocks ->   0.04 GB
+		//     5 000 blocks ->   0.9  GB
+		//    20 000 blocks ->  14.9  GB
+		//    50 000 blocks ->  93    GB
+		//
+		// Measured on a NAND-obfuscated PE section: 872 MB before this pass,
+		// >23 GB a few seconds into it, then killed.
+		//
+		// PERFORMANCE_CEIL below already skips the *solving* of oversized
+		// systems, but it is checked only after initSystem() has allocated
+		// the matrix -- too late to prevent the blow-up. Bail out before
+		// allocating anything we would not use anyway.
+		//
+		// A.rows() is matrixLen == 1 + sum over blocks of (1 + pred_size),
+		// so this mirrors the PERFORMANCE_CEIL test without building A.
+		std::size_t predictedRows = 1;
+		for (BasicBlock& bb : funMd.function)
+		{
+			predictedRows += 1 + pred_size(&bb);
+		}
+		if (predictedRows > PERFORMANCE_CEIL)
+		{
+			continue;
+		}
+
 		funMd.initSystem();
 		BasicBlock& enterBlock = funMd.function.begin().operator*();
 		funMd.addEquation({{enterBlock, 1, funMd.inIndex}}, EMPTY_FPU_STACK);

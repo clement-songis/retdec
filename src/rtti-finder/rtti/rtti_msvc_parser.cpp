@@ -21,6 +21,42 @@ using namespace retdec::utils;
 namespace retdec {
 namespace rtti_finder {
 
+namespace {
+
+/**
+ * Read a reference field of an MSVC RTTI structure.
+ *
+ * On x86 these fields are absolute pointers (one machine word). On x64 MSVC
+ * stores them as 32-bit image-relative offsets (RVA), whatever the pointer
+ * size: CompleteObjectLocator (signature 1) -> TypeDescriptor and
+ * ClassHierarchyDescriptor, ClassHierarchyDescriptor -> BaseClassArray,
+ * BaseClassArray entries, and BaseClassDescriptor -> TypeDescriptor.
+ * Reading them as 8-byte words makes every x64 RTTI parse fail.
+ *
+ * The fields of the TypeDescriptor itself (pVFTable, spare) are real
+ * pointers on both architectures and must keep using getWord().
+ */
+bool getRttiRef(
+		const retdec::loader::Image* img,
+		retdec::common::Address addr,
+		std::uint64_t& res,
+		std::size_t& fieldSize)
+{
+	if (img->getBytesPerWord() == 8)
+	{
+		fieldSize = 4;
+		std::uint64_t rva = 0;
+		if (!img->get4Byte(addr, rva) || rva == 0)
+			return false;
+		res = img->getBaseAddress() + rva;
+		return true;
+	}
+	fieldSize = img->getBytesPerWord();
+	return img->getWord(addr, res);
+}
+
+} // anonymous namespace
+
 RTTITypeDescriptor* parseMsvcTypeDescriptor(
 		const retdec::loader::Image* img,
 		RttiMsvc& rttis,
@@ -87,12 +123,12 @@ RTTIBaseClassDescriptor* parseMsvcBaseClassDescriptor(
 	}
 
 	auto addr = baseDescriptorAddr;
-	size_t wordSize = img->getBytesPerWord();
 
 	std::uint64_t typeDescriptorAddr = 0;
-	if (!img->getWord(addr, typeDescriptorAddr))
+	std::size_t refSize = 0;
+	if (!getRttiRef(img, addr, typeDescriptorAddr, refSize))
 		return nullptr;
-	addr += wordSize;
+	addr += refSize;
 
 	std::uint64_t numContainedBases = 0;
 	if (!img->get4Byte(addr, numContainedBases))
@@ -163,7 +199,6 @@ RTTIClassHierarchyDescriptor* parseMsvcClassDescriptor(
 	}
 
 	auto addr = classDescriptorAddr;
-	size_t wordSize = img->getBytesPerWord();
 
 	std::uint64_t signature2 = 0;
 	if (!img->get4Byte(addr, signature2))
@@ -181,18 +216,19 @@ RTTIClassHierarchyDescriptor* parseMsvcClassDescriptor(
 	addr += 4;
 
 	std::uint64_t baseClassArrayAddr = 0;
-	if (!img->getWord(addr, baseClassArrayAddr))
+	std::size_t refSize = 0;
+	if (!getRttiRef(img, addr, baseClassArrayAddr, refSize))
 		return nullptr;
-	addr += wordSize;
+	addr += refSize;
 
 	addr = baseClassArrayAddr;
 	std::vector<std::uint64_t> baseClassArray;
 	for (unsigned i=0; i<numBaseClasses; ++i)
 	{
 		std::uint64_t tmp = 0;
-		if (!img->getWord(addr, tmp))
+		if (!getRttiRef(img, addr, tmp, refSize))
 			return nullptr;
-		addr += wordSize;
+		addr += refSize;
 
 		baseClassArray.push_back(tmp);
 	}
@@ -240,7 +276,6 @@ RTTICompleteObjectLocator* parseMsvcObjectLocator(
 		return &findRtti->second;
 	}
 
-	size_t wordSize = img->getBytesPerWord();
 
 	Address addr = rttiAddr;
 	std::uint64_t signature1 = 0;
@@ -259,14 +294,15 @@ RTTICompleteObjectLocator* parseMsvcObjectLocator(
 	addr += 4;
 
 	std::uint64_t typeDescriptorAddr = 0;
-	if (!img->getWord(addr, typeDescriptorAddr))
+	std::size_t refSize = 0;
+	if (!getRttiRef(img, addr, typeDescriptorAddr, refSize))
 		return nullptr;
-	addr += wordSize;
+	addr += refSize;
 
 	std::uint64_t classDescriptorAddr = 0;
-	if (!img->getWord(addr, classDescriptorAddr))
+	if (!getRttiRef(img, addr, classDescriptorAddr, refSize))
 		return nullptr;
-	addr += wordSize;
+	addr += refSize;
 
 	LOG << "\nRTTI @ " << rttiAddr << "\n";
 	LOG << "\tsign    = " << signature1 << "\n";

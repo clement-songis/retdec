@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <map>
+#include <set>
 #include <string>
 
 #include "retdec/llvmir2hll/hll/hll_writer.h"
@@ -182,6 +183,11 @@ private:
 
 	/// Mapping of a structured type into its name.
 	StructTypeNameMap structNames;
+
+	/// Unnamed structures currently being emitted inline. An unnamed
+	/// structure that (indirectly) points to itself cannot be spelled in C
+	/// and would otherwise recurse forever.
+	std::set<ShPtr<StructType>> structsBeingEmittedInline;
 
 	/// A counter for unnamed structures.
 	/// It is needed for assigning names to unnamed structures.

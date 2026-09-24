@@ -1204,9 +1204,17 @@ void CHLLWriter::visit(ShPtr<StructType> type) {
 		out->keyword("struct");
 		out->space();
 		out->dataType(i->second);
+	} else if (structsBeingEmittedInline.count(type)) {
+		// An unnamed structure that refers to itself (e.g. through a pointer
+		// member). C cannot express this without a name, and emitting it
+		// inline again would recurse forever. It is only reachable through a
+		// pointer, so fall back to an untyped pointee.
+		out->dataType("void");
 	} else {
 		// Emit the structure inline.
+		structsBeingEmittedInline.insert(type);
 		emitStructDeclaration(type, true);
+		structsBeingEmittedInline.erase(type);
 	}
 }
 

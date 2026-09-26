@@ -27,6 +27,28 @@ endif()
 
 set(LLVM_INSTALL_DIR ${CMAKE_BINARY_DIR}/deps/install/llvm)
 
+# RETDEC_PREBUILT_LLVM: absolute path to an already installed LLVM tree, built
+# with the same options this file would otherwise use. When set, LLVM is not
+# downloaded nor built here; only its libraries and headers are consumed.
+#
+# This exists so that rebuilding RetDec does not rebuild LLVM. Packaging that
+# splits the two (Nix, distro packages) and local incremental builds both need it.
+#
+# RETDEC_PREBUILT_LLVM_SRC is optional and points at the matching LLVM sources;
+# the include path below uses it. It defaults to the install tree.
+if(RETDEC_PREBUILT_LLVM)
+	message(STATUS "LLVM: using prebuilt LLVM from ${RETDEC_PREBUILT_LLVM}.")
+	set(LLVM_INSTALL_DIR "${RETDEC_PREBUILT_LLVM}")
+	if(RETDEC_PREBUILT_LLVM_SRC)
+		set(source_dir "${RETDEC_PREBUILT_LLVM_SRC}")
+	else()
+		set(source_dir "${RETDEC_PREBUILT_LLVM}")
+	endif()
+	# The rest of this file adds a dependency on the llvm-project target.
+	# Nothing to build, but the target must exist.
+	add_custom_target(llvm-project)
+else()
+
 if(LLVM_LOCAL_DIR)
 	message(STATUS "LLVM: using local LLVM directory.")
 	set(LLVM_SOURCE_DIR "${LLVM_LOCAL_DIR}")
@@ -141,6 +163,8 @@ if(CHANGED)
 	clean_cmake_files(${binary_dir})
 endif()
 
+endif()
+
 set(LLVM_LIB_LIST
 	LLVMDebugInfoDWARF
 	LLVMBitWriter
@@ -165,7 +189,9 @@ set(LLVM_LIB_LIST
 	LLVMPasses
 )
 
-ExternalProject_Get_Property(llvm-project source_dir)
+if(NOT RETDEC_PREBUILT_LLVM)
+	ExternalProject_Get_Property(llvm-project source_dir)
+endif()
 
 # Create target.
 

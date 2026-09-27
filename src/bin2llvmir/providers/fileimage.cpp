@@ -102,12 +102,27 @@ FileImage::FileImage(
 
 void FileImage::initRtti(Config* config)
 {
-	if (config->getConfig().tools.isMsvc())
+	auto& tools = config->getConfig().tools;
+
+	// Compiler detection is not reliable on packed or obfuscated binaries: a
+	// VMProtect-ed MSVC PE can end up with no compiler entry at all. Picking
+	// the GCC finder for such an image silently discards every class and
+	// vtable, even though the MSVC RTTI structures are intact.
+	//
+	// The two finders fill separate containers and every consumer already
+	// iterates both (ClassHierarchyAnalysis, Decoder), so when no compiler is
+	// identified, run both rather than guess wrong.
+	if (tools.isMsvc())
 	{
 		_rtti.findMsvc(getImage());
 	}
+	else if (tools.isGcc())
+	{
+		_rtti.findGcc(getImage());
+	}
 	else
 	{
+		_rtti.findMsvc(getImage());
 		_rtti.findGcc(getImage());
 	}
 }

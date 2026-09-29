@@ -177,6 +177,7 @@ add_library(llvmir2hll STATIC
 	optimizer/optimizers/self_assign_optimizer.cpp
 	optimizer/optimizers/simple_copy_propagation_optimizer.cpp
 	optimizer/optimizers/simplify_arithm_expr/bool_comparison_optimizer.cpp
+	optimizer/optimizers/simplify_arithm_expr/byte_lane_sub_optimizer.cpp
 	optimizer/optimizers/simplify_arithm_expr/change_order_of_operands_sub_optimizer.cpp
 	optimizer/optimizers/simplify_arithm_expr/const_operator_const_sub_optimizer.cpp
 	optimizer/optimizers/simplify_arithm_expr/equal_operands_sub_optimizer.cpp

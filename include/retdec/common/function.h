@@ -7,6 +7,7 @@
 #ifndef RETDEC_COMMON_FUNCTION_H
 #define RETDEC_COMMON_FUNCTION_H
 
+#include <map>
 #include <set>
 #include <string>
 
@@ -205,11 +206,77 @@ struct FunctionAddressCompare
 class FunctionContainer : public std::set<Function, FunctionNameCompare>
 {
 	public:
+		using Base = std::set<Function, FunctionNameCompare>;
+
 		bool hasFunction(const std::string& name);
 		const Function* getFunctionByName(const std::string& name) const;
 		const Function* getFunctionByStartAddress(
 				const retdec::common::Address& addr) const;
 		const Function* getFunctionByRealName(const std::string& name) const;
+
+		// Maintien de l'index adresse->fonction (voir plus bas).
+		// - insert : mise a jour INCREMENTALE si l'index est deja bati. Ne PAS tout
+		//   invalider, sinon un insert suivi d'un lookup dans la meme boucle
+		//   (ex. Decoder::initConfigFunctions) reconstruit l'index a chaque tour =
+		//   O(n^2) reintroduit. std::set::insert n'invalide pas les pointeurs vers
+		//   les elements existants, donc les entrees deja en cache restent valides.
+		// - erase/clear : invalidation totale (rare ici ; un erase pendouillerait
+		//   des pointeurs en cache).
+		std::pair<iterator,bool> insert(const value_type& v)
+		{
+			auto p = Base::insert(v);
+			if (!_addr2fncDirty && p.second)
+				_addr2fnc.emplace(p.first->getStart(), &(*p.first));
+			return p;
+		}
+		std::pair<iterator,bool> insert(value_type&& v)
+		{
+			auto p = Base::insert(std::move(v));
+			if (!_addr2fncDirty && p.second)
+				_addr2fnc.emplace(p.first->getStart(), &(*p.first));
+			return p;
+		}
+		// Surcharges avec hint (utilisees par la (de)serialisation) : mise a jour
+		// incrementale en verifiant que l'element n'etait pas deja present.
+		iterator insert(const_iterator hint, const value_type& v)
+		{
+			auto before = Base::size();
+			auto it = Base::insert(hint, v);
+			if (!_addr2fncDirty && Base::size() != before)
+				_addr2fnc.emplace(it->getStart(), &(*it));
+			return it;
+		}
+		iterator insert(const_iterator hint, value_type&& v)
+		{
+			auto before = Base::size();
+			auto it = Base::insert(hint, std::move(v));
+			if (!_addr2fncDirty && Base::size() != before)
+				_addr2fnc.emplace(it->getStart(), &(*it));
+			return it;
+		}
+		template <typename InputIt>
+		void insert(InputIt first, InputIt last)
+		{
+			_addr2fncDirty = true;
+			Base::insert(first, last);
+		}
+		template <typename... Args>
+		auto erase(Args&&... args)
+		{
+			_addr2fncDirty = true;
+			return Base::erase(std::forward<Args>(args)...);
+		}
+		void clear() { _addr2fncDirty = true; Base::clear(); }
+
+	private:
+		// Index paresseux adresse->fonction pour getFunctionByStartAddress.
+		// Le conteneur est trie par NOM (FunctionNameCompare), donc une recherche
+		// par adresse etait un scan lineaire O(n) ; appelee par constante-adresse
+		// dans la passe retdec-constants, cela donnait un O(n^2) qui rendait la
+		// decompilation de grandes plages .grfn1 intractable. On maintient un cache
+		// adresse->Function*, bati paresseusement puis tenu a jour incrementalement.
+		mutable std::map<retdec::common::Address, const Function*> _addr2fnc;
+		mutable bool _addr2fncDirty = true;
 };
 
 // TODO:

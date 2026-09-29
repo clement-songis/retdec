@@ -148,15 +148,24 @@ const Function* FunctionContainer::getFunctionByName(
 const Function* FunctionContainer::getFunctionByStartAddress(
 		const retdec::common::Address& addr) const
 {
-	for (auto& elem : *this)
+	// Index paresseux : bati au premier appel, puis tenu a jour incrementalement
+	// par insert() ; erase()/clear() le marquent sale pour reconstruction. Passe
+	// d'un scan O(n) a un lookup O(log n), supprimant le O(n^2) de la passe
+	// retdec-constants sur les grandes plages .grfn1.
+	if (_addr2fncDirty)
 	{
-		if (addr == elem.getStart())
+		_addr2fnc.clear();
+		for (auto& elem : *this)
 		{
-			return &elem;
+			// En cas d'adresses de depart dupliquees, la premiere rencontree gagne,
+			// ce qui reproduit le comportement du scan lineaire d'origine.
+			_addr2fnc.emplace(elem.getStart(), &elem);
 		}
+		_addr2fncDirty = false;
 	}
 
-	return nullptr;
+	auto it = _addr2fnc.find(addr);
+	return it != _addr2fnc.end() ? it->second : nullptr;
 }
 
 const Function* FunctionContainer::getFunctionByRealName(

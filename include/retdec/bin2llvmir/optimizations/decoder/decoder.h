@@ -38,6 +38,9 @@
 namespace retdec {
 namespace bin2llvmir {
 
+class GriffinSidecar;
+namespace tests { class GriffinDecoderTests; }
+
 class Decoder : public llvm::ModulePass
 {
 	public:
@@ -128,6 +131,13 @@ class Decoder : public llvm::ModulePass
 
 		void resolvePseudoCalls();
 		void finalizePseudoCalls();
+
+		bool transformToGriffinRetTrampoline(
+				common::Address addr,
+				llvm::CallInst* pseudo);
+
+		// Focused unit tests for proved, unknown and cross-function targets.
+		friend class tests::GriffinDecoderTests;
 
 	// Basic block related methods.
 	//
@@ -298,6 +308,7 @@ class Decoder : public llvm::ModulePass
 		Abi* _abi = nullptr;
 
 		std::unique_ptr<capstone2llvmir::Capstone2LlvmIrTranslator> _c2l;
+		std::unique_ptr<GriffinSidecar> _griffin;
 		cs_insn* _dryCsInsn = nullptr;
 
 		llvm::IRBuilder<>* _irb;

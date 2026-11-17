@@ -12,6 +12,7 @@
 #include "retdec/utils/io/log.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder.h"
 #include "retdec/bin2llvmir/analyses/nt_wdk_prototypes.h"
+#include "retdec/bin2llvmir/providers/griffin_sidecar.h"
 #include "retdec/bin2llvmir/utils/llvm.h"
 #include "retdec/bin2llvmir/utils/capstone.h"
 
@@ -102,6 +103,17 @@ bool Decoder::run()
 	{
 		LOG << "[ABORT] Config or object image is not available.\n";
 		return false;
+	}
+
+	_griffin.reset();
+	auto& griffinPath = _config->getConfig().parameters.getGriffinSidecar();
+	if (!griffinPath.empty())
+	{
+		_griffin = std::make_unique<GriffinSidecar>(
+				GriffinSidecar::fromFile(griffinPath));
+		LOG << "Griffin sidecar: " << _griffin->getRetTargetCount()
+				<< " proved ret-trampolines, "
+				<< _griffin->getUnresolvedRetCount() << " unresolved rets\n";
 	}
 
 	initTranslator();
@@ -478,6 +490,62 @@ bool Decoder::instructionBreaksBasicBlock(
 }
 
 /**
+ * Turn a dynamically proved Griffin ret-trampoline into an intra-function
+ * branch. Never manufacture a call when the target belongs to another
+ * fragment/function: the existing ReturnInst fallback is safer.
+ */
+bool Decoder::transformToGriffinRetTrampoline(
+		common::Address addr,
+		llvm::CallInst* pseudo)
+{
+	if (_griffin == nullptr || pseudo == nullptr)
+	{
+		return false;
+	}
+	auto target = _griffin->getRetTrampolineTarget(addr);
+	if (!target)
+	{
+		return false;
+	}
+
+	auto* currentFnc = pseudo->getFunction();
+	llvm::BasicBlock* targetBb = getBasicBlockAtAddress(*target);
+	if (targetBb)
+	{
+		if (targetBb->getParent() != currentFnc || !targetBb->getPrevNode())
+		{
+			return false;
+		}
+	}
+	else
+	{
+		auto* exactFnc = getFunctionAtAddress(*target);
+		auto* containingFnc = getFunctionContainingAddress(*target);
+		if ((exactFnc && exactFnc != currentFnc)
+				|| (containingFnc && containingFnc != currentFnc))
+		{
+			LOG << "\t\t" << "Griffin ret target in another function @ "
+					<< *target << " -> leave unresolved" << std::endl;
+			return false;
+		}
+		targetBb = createBasicBlock(*target, currentFnc);
+	}
+
+	transformToBranch(pseudo, targetBb);
+	if (_c2l)
+	{
+		_jumpTargets.push(
+				*target,
+				JumpTarget::eType::CONTROL_FLOW_BR_TRUE,
+				_c2l->getBasicMode(),
+				addr);
+	}
+	LOG << "\t\t" << "Griffin ret-trampoline @ " << addr << " -> "
+			<< *target << std::endl;
+	return true;
+}
+
+/**
  * @return @c True if this instruction ends basic block, @c false otherwise.
  */
 bool Decoder::getJumpTargetsFromInstruction(
@@ -583,6 +651,10 @@ bool Decoder::getJumpTargetsFromInstruction(
 	//
 	else if (_c2l->isReturnFunctionCall(pCall))
 	{
+		if (transformToGriffinRetTrampoline(addr, pCall))
+		{
+			return true;
+		}
 		transformToReturn(pCall);
 		if (auto* cond = _c2l->isInConditionReturnFunctionCall(pCall))
 		{

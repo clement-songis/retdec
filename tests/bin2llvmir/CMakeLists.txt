@@ -19,6 +19,7 @@ add_executable(tests-bin2llvmir
 	providers/debugformat_tests.cpp
 	providers/demangler_tests.cpp
 	providers/fileimage_tests.cpp
+	providers/griffin_sidecar_tests.cpp
 	providers/lti_tests.cpp
 	providers/names.cpp
 	utils/ctypes2llvm_type_tests.cpp
@@ -32,6 +33,11 @@ target_include_directories(tests-bin2llvmir
 		${RETDEC_TESTS_DIR}
 )
 
+target_compile_definitions(tests-bin2llvmir
+	PRIVATE
+		RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json"
+)
+
 target_link_libraries(tests-bin2llvmir
 	retdec::bin2llvmir
 	retdec::utils
@@ -42,6 +48,19 @@ set_target_properties(tests-bin2llvmir
 	PROPERTIES
 		OUTPUT_NAME "retdec-tests-bin2llvmir"
 )
+
+# Focused target for the Griffin provider. It avoids building the full
+# bin2llvmir test suite when iterating on the Decoder integration.
+add_executable(tests-griffin
+	providers/griffin_sidecar_tests.cpp)
+target_include_directories(tests-griffin PRIVATE ${RETDEC_TESTS_DIR})
+target_compile_definitions(tests-griffin PRIVATE
+	RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json")
+target_link_libraries(tests-griffin
+	retdec::bin2llvmir
+	retdec::utils
+	retdec::deps::gmock_main)
+set_target_properties(tests-griffin PROPERTIES OUTPUT_NAME "retdec-tests-griffin")
 
 install(TARGETS tests-bin2llvmir
 	RUNTIME DESTINATION ${RETDEC_INSTALL_TESTS_DIR}

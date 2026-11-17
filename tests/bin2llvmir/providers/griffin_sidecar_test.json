@@ -1,0 +1,48 @@
+{
+  "format": "retdec-griffin-dynamic-sidecar-v1",
+  "addressModel": {
+    "key": "RVA",
+    "preferredTraceBase": "0x140000000",
+    "runtimeImageBase": "0xfffff802b93d0000",
+    "imageSize": "0x6bb1000"
+  },
+  "controlFlowSites": [
+    {
+      "siteRva": "0x569140",
+      "kind": "ret",
+      "texts": ["ret"],
+      "targetRva": "0x2a9881",
+      "targetBase": "trace",
+      "resolution": "observed-successor-node",
+      "proof": [{"run": "synthetic-unit-test", "node": 185199}],
+      "successorProof": {"run": "synthetic-unit-test", "node": 185200},
+      "stackTrampolineEvidence": {
+        "pushNode": 185198,
+        "pushVa": "0x140569139",
+        "text": "push qword ptr [rsp + 0x220]",
+        "targetStillUnresolved": false
+      }
+    },
+    {
+      "siteRva": "0xac7c",
+      "kind": "ret",
+      "texts": ["ret"],
+      "targetRva": null,
+      "resolution": "dynamic-target-not-recorded",
+      "proof": [{"run": "real-sidecar-shape", "node": 100653}],
+      "stackTrampolineEvidence": {
+        "text": "push qword ptr [rsp + 0x20]",
+        "targetStillUnresolved": true
+      }
+    },
+    {
+      "siteRva": "0x106270",
+      "kind": "ret",
+      "texts": ["ret"],
+      "targetRva": "0x106271",
+      "resolution": "observed-successor-node",
+      "proof": [{"run": "synthetic-ordinary-return", "node": 100688}],
+      "successorProof": {"run": "synthetic-ordinary-return", "node": 100689}
+    }
+  ]
+}

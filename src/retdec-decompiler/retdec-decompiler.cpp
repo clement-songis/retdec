@@ -339,6 +339,11 @@ void ProgramOptions::loadOption(std::list<std::string>::iterator& i)
 	{
 		noConfigOut = true;
 	}
+	else if (isParam(i, "", "--griffin-sidecar"))
+	{
+		params.setGriffinSidecar(checkFile(
+				getParamOrDie(i), "[--griffin-sidecar]"));
+	}
 	else if (isParam(i, "-p", "--pdb"))
 	{
 		std::string pdb = checkFile(getParamOrDie(i), "[-p|--pdb]");
@@ -666,6 +671,7 @@ General arguments:
 	                  These four side outputs cover the WHOLE input file even
 	                  with --select-ranges, so disabling them can save most of
 	                  the run time and disk space on large binaries.
+	[--griffin-sidecar FILE] JSON dynamic control-flow evidence for Griffin ret-trampolines.
 	[--cleanup] Removes temporary files created during the decompilation.
 	[--config] Specify JSON decompilation configuration file.
 	[--disable-static-code-detection] Prevents detection of statically linked code.

@@ -39,6 +39,7 @@ const std::string JSON_outputAsmFile            = "outputAsmFile";
 const std::string JSON_outputLlFile             = "outputLlFile";
 const std::string JSON_outputConfigFile         = "outputConfigFile";
 const std::string JSON_griffinSidecar           = "griffinSidecar";
+const std::string JSON_griffinOverlay           = "griffinOverlay";
 const std::string JSON_outputUnpackedFile       = "outputUnpackedFile";
 const std::string JSON_outputFormat             = "outputFormat";
 const std::string JSON_logFile                  = "logFile";
@@ -205,6 +206,11 @@ void Parameters::setOutputConfigFile(const std::string& file)
 void Parameters::setGriffinSidecar(const std::string& file)
 {
 	_griffinSidecar = file;
+}
+
+void Parameters::setGriffinOverlay(const std::string& file)
+{
+	_griffinOverlay = file;
 }
 
 void Parameters::setOutputUnpackedFile(const std::string& file)
@@ -386,6 +392,11 @@ const std::string& Parameters::getGriffinSidecar() const
 	return _griffinSidecar;
 }
 
+const std::string& Parameters::getGriffinOverlay() const
+{
+	return _griffinOverlay;
+}
+
 const std::string& Parameters::getOutputUnpackedFile() const
 {
 	return _outputUnpackedFile;
@@ -484,6 +495,7 @@ void Parameters::fixRelativePaths(const std::string& configPath)
 	fixPaths(cryptoPatternPaths, c);
 	fixPath(_ordinalNumbersDirectory, c);
 	fixPath(_griffinSidecar, c);
+	fixPath(_griffinOverlay, c);
 }
 
 /**
@@ -507,6 +519,7 @@ void Parameters::serialize(Writer& writer) const
 	serdes::serializeString(writer, JSON_outputLlFile, getOutputLlvmirFile());
 	serdes::serializeString(writer, JSON_outputConfigFile, getOutputConfigFile());
 	serdes::serializeString(writer, JSON_griffinSidecar, getGriffinSidecar());
+	serdes::serializeString(writer, JSON_griffinOverlay, getGriffinOverlay());
 	serdes::serializeString(writer, JSON_outputUnpackedFile, getOutputUnpackedFile());
 	serdes::serializeString(writer, JSON_outputFormat, getOutputFormat());
 	serdes::serializeString(writer, JSON_logFile, getLogFile());
@@ -576,6 +589,7 @@ void Parameters::deserialize(const rapidjson::Value& val)
 	setOutputLlvmirFile( serdes::deserializeString(val, JSON_outputLlFile) );
 	setOutputConfigFile( serdes::deserializeString(val, JSON_outputConfigFile) );
 	setGriffinSidecar( serdes::deserializeString(val, JSON_griffinSidecar) );
+	setGriffinOverlay( serdes::deserializeString(val, JSON_griffinOverlay) );
 	setOutputUnpackedFile( serdes::deserializeString(val, JSON_outputUnpackedFile) );
 	setOutputFormat( serdes::deserializeString(val, JSON_outputFormat) );
 	setLogFile( serdes::deserializeString(val, JSON_logFile) );

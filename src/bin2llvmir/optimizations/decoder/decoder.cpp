@@ -12,6 +12,7 @@
 #include "retdec/utils/io/log.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder.h"
 #include "retdec/bin2llvmir/analyses/nt_wdk_prototypes.h"
+#include "retdec/bin2llvmir/providers/griffin_overlay.h"
 #include "retdec/bin2llvmir/providers/griffin_sidecar.h"
 #include "retdec/bin2llvmir/utils/llvm.h"
 #include "retdec/bin2llvmir/utils/capstone.h"
@@ -119,6 +120,22 @@ bool Decoder::run()
 		LOG << "Griffin sidecar: " << _griffin->getRetTargetCount()
 				<< " proved ret-trampolines, "
 				<< _griffin->getUnresolvedRetCount() << " unresolved rets\n";
+	}
+
+	auto& griffinOverlayPath = _config->getConfig().parameters.getGriffinOverlay();
+	if (!griffinOverlayPath.empty())
+	{
+		auto overlay = GriffinOverlay::fromFile(griffinOverlayPath);
+		if (!overlay.checkImageSha256(_image->getFileFormat()->getSha256()))
+		{
+			throw std::runtime_error(
+					"Griffin overlay image SHA256 does not match the input binary");
+		}
+		auto count = overlay.applyTo(
+				*_image->getImage(), _image->getImage()->getBaseAddress());
+		LOG << "Griffin overlay: " << count << " entries, "
+				<< overlay.getAppliedByteCount() << " unique bytes, "
+				<< overlay.getConflictCount() << " conflicts skipped\n";
 	}
 
 	initTranslator();

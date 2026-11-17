@@ -103,6 +103,7 @@ add_library(bin2llvmir STATIC
 	providers/debugformat.cpp
 	providers/demangler.cpp
 	providers/fileimage.cpp
+	providers/griffin_overlay.cpp
 	providers/griffin_sidecar.cpp
 	providers/lti.cpp
 	providers/names.cpp

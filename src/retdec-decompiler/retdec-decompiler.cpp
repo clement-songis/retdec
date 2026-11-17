@@ -344,6 +344,11 @@ void ProgramOptions::loadOption(std::list<std::string>::iterator& i)
 		params.setGriffinSidecar(checkFile(
 				getParamOrDie(i), "[--griffin-sidecar]"));
 	}
+	else if (isParam(i, "", "--griffin-overlay"))
+	{
+		params.setGriffinOverlay(checkFile(
+				getParamOrDie(i), "[--griffin-overlay]"));
+	}
 	else if (isParam(i, "-p", "--pdb"))
 	{
 		std::string pdb = checkFile(getParamOrDie(i), "[-p|--pdb]");
@@ -672,6 +677,7 @@ General arguments:
 	                  with --select-ranges, so disabling them can save most of
 	                  the run time and disk space on large binaries.
 	[--griffin-sidecar FILE] JSON dynamic control-flow evidence for Griffin ret-trampolines.
+	[--griffin-overlay FILE] JSON dynamic bytes for the opt-in Griffin analysis image.
 	[--cleanup] Removes temporary files created during the decompilation.
 	[--config] Specify JSON decompilation configuration file.
 	[--disable-static-code-detection] Prevents detection of statically linked code.

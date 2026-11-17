@@ -1,0 +1,31 @@
+{
+  "format": "griffin-analysis-overlay-v1",
+  "addressModel": {
+    "key": "RVA",
+    "runtimeImageBase": "0x140000000",
+    "preferredTraceBase": "0x140000000",
+    "imageSize": "0x6bb1000"
+  },
+  "image": {
+    "path": "samples/vgk_12nov_decrypted.bin",
+    "sha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+    "layout": "rva"
+  },
+  "conflicts": [],
+  "entries": [
+    {
+      "rva": "0x1000",
+      "length": 2,
+      "data": "aabb",
+      "analysisEligible": true,
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390"
+    },
+    {
+      "rva": "0x1001",
+      "length": 1,
+      "data": "cc",
+      "analysisEligible": true,
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390"
+    }
+  ]
+}

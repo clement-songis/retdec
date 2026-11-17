@@ -238,7 +238,8 @@ void StackAnalysis::handleInstruction(
 				s->getValueOperand(),
 				a->getType()->getElementType(),
 				inst);
-		new StoreInst(conv, a, inst);
+		auto* newStore = new StoreInst(conv, a, inst);
+		newStore->setVolatile(s->isVolatile());
 		_toRemove.insert(s);
 	}
 	else if (l && l->getPointerOperand() == val)

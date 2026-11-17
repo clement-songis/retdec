@@ -478,6 +478,17 @@ bool AsmInstruction::instructionsCanBeErased()
 {
 	auto bbs = getBasicBlocks();
 
+	// Volatile stores carry observable side effects even when no SSA user
+	// remains. Overlay decoding relies on this to preserve captured pushes.
+	for (auto* i : getInstructions())
+	{
+		if (auto* store = llvm::dyn_cast<llvm::StoreInst>(i);
+				store && store->isVolatile())
+		{
+			return false;
+		}
+	}
+
 	retdec::utils::NonIterableSet<const Value*> seen;
 	for (auto it = rbegin(), e = rend(); it != e; ++it)
 	{

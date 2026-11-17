@@ -32,6 +32,7 @@ bool unusedStores(llvm::Instruction* insn, ReachingDefinitionsAnalysis& RDA)
 	auto* abi = AbiProvider::getAbi(insn->getModule());
 	auto* store = llvm::dyn_cast<llvm::StoreInst>(insn);
 	if (store == nullptr
+			|| store->isVolatile()
 			|| (llvm::isa<llvm::GlobalVariable>(store->getPointerOperand())
 			&& !abi->isRegister(store->getPointerOperand())))
 	{
@@ -123,6 +124,7 @@ bool defWithUsesInTheSameBb(
 {
 	auto* store = llvm::dyn_cast<llvm::StoreInst>(insn);
 	if (store == nullptr
+			|| store->isVolatile()
 			|| (llvm::isa<llvm::GlobalVariable>(store->getPointerOperand())
 			&& !abi->isRegister(store->getPointerOperand())))
 	{

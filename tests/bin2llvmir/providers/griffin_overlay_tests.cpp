@@ -71,6 +71,10 @@ TEST_F(GriffinOverlayTests, realOverlayAppliesWitnessBytesAtImageBase)
 	EXPECT_EQ(bytes({0x48, 0x8b, 0xd9}), image.writes[TraceBase + 0x2a9886]);
 	EXPECT_EQ(bytes({0xff, 0xe0}), image.writes[TraceBase + 0x58df90]);
 	EXPECT_EQ(bytes({0xc3}), image.writes[TraceBase + 0x569140]);
+	EXPECT_EQ(0x463ae3, *overlay.getRequiredRangeEnd(0x463ade, 0x463ae2));
+	EXPECT_EQ(0x2a9889, *overlay.getRequiredRangeEnd(0x2a9881, 0x2a9888));
+	EXPECT_EQ(0x58df92, *overlay.getRequiredRangeEnd(0x58df90, 0x58df91));
+	EXPECT_EQ(0x569141, *overlay.getRequiredRangeEnd(0x569140, 0x569140));
 }
 
 TEST_F(GriffinOverlayTests, conflictsAndIneligibleEntriesAreNotApplied)

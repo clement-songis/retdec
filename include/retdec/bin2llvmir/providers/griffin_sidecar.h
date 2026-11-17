@@ -30,8 +30,18 @@ namespace bin2llvmir {
 class GriffinSidecar
 {
 	public:
+		enum class ControlStatus
+		{
+			Unknown,
+			Proven,
+			Rejected
+		};
+
 		static GriffinSidecar fromFile(const std::string& path);
 
+		ControlStatus getControlStatus(
+				common::Address site,
+				const std::string& kind) const;
 		std::optional<common::Address> getControlTarget(
 				common::Address site,
 				const std::string& kind) const;
@@ -62,6 +72,7 @@ class GriffinSidecar
 		bool _evidenceV2 = false;
 		std::string _imageSha256;
 		std::map<uint64_t, ControlTarget> _controlTargets;
+		std::map<uint64_t, std::string> _rejectedControlTargets;
 		std::size_t _dynamicVerifiedTargetCount = 0;
 		std::map<uint64_t, uint64_t> _retTargets;
 		std::set<uint64_t> _unresolvedRets;

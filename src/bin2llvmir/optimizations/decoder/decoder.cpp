@@ -123,19 +123,21 @@ bool Decoder::run()
 	}
 
 	auto& griffinOverlayPath = _config->getConfig().parameters.getGriffinOverlay();
+	_griffinOverlay.reset();
 	if (!griffinOverlayPath.empty())
 	{
-		auto overlay = GriffinOverlay::fromFile(griffinOverlayPath);
-		if (!overlay.checkImageSha256(_image->getFileFormat()->getSha256()))
+		_griffinOverlay = std::make_unique<GriffinOverlay>(
+				GriffinOverlay::fromFile(griffinOverlayPath));
+		if (!_griffinOverlay->checkImageSha256(_image->getFileFormat()->getSha256()))
 		{
 			throw std::runtime_error(
 					"Griffin overlay image SHA256 does not match the input binary");
 		}
-		auto count = overlay.applyTo(
+		auto count = _griffinOverlay->applyTo(
 				*_image->getImage(), _image->getImage()->getBaseAddress());
 		LOG << "Griffin overlay: " << count << " entries, "
-				<< overlay.getAppliedByteCount() << " unique bytes, "
-				<< overlay.getConflictCount() << " conflicts skipped\n";
+				<< _griffinOverlay->getAppliedByteCount() << " unique bytes, "
+				<< _griffinOverlay->getConflictCount() << " conflicts skipped\n";
 	}
 
 	initTranslator();
@@ -259,6 +261,29 @@ void Decoder::decodeJumpTarget(const JumpTarget& jt)
 
 	auto toRangeEnd = range->getEnd() - start;
 
+	// Selected ranges may end on the last byte of an instruction. Their end is
+	// exclusive here, so use the overlay's exact instruction length to avoid
+	// truncating call/jmp or the prologue. Overlaps are intentional in Griffin.
+	std::size_t requiredLength = 0;
+	if (_griffinOverlay)
+	{
+		auto imageBase = _image->getImage()->getBaseAddress();
+		if (auto requiredEnd = _griffinOverlay->getRequiredRangeEnd(
+				start.getValue() - imageBase,
+				range->getEnd().getValue() - imageBase))
+		{
+			if (*requiredEnd > range->getEnd())
+			{
+				auto rangeStart = range->getStart();
+				auto rangeEnd = range->getEnd();
+				_ranges.remove(rangeStart, rangeEnd);
+				_ranges.addPrimary(rangeStart, *requiredEnd);
+				range = _ranges.getPrimary(start);
+			}
+			requiredLength = *requiredEnd - (start.getValue() - imageBase);
+		}
+	}
+
 	bytes.second = toRangeEnd < bytes.second ? toRangeEnd : bytes.second;
 
 	if (jt.hasSize() && jt.getSize() < bytes.second)
@@ -275,6 +300,7 @@ void Decoder::decodeJumpTarget(const JumpTarget& jt)
 		auto sz = nextFncAddr - start;
 		bytes.second = sz < bytes.second ? sz : bytes.second;
 	}
+	bytes.second = std::max(bytes.second, requiredLength);
 
 	bool useAlt = alternative
 			&& jt.getType() > JumpTarget::eType::CONTROL_FLOW_RETURN_TARGET
@@ -511,6 +537,120 @@ bool Decoder::instructionBreaksBasicBlock(
 	return false;
 }
 
+/** Call a function only when the sidecar proves the exact target. */
+bool Decoder::transformToGriffinCall(
+		common::Address addr,
+		llvm::CallInst* pseudo)
+{
+	if (_griffin == nullptr || pseudo == nullptr)
+	{
+		return false;
+	}
+	auto target = _griffin->getControlTarget(addr, "call");
+	if (!target)
+	{
+		return false;
+	}
+
+	llvm::Function* targetFnc = nullptr;
+	llvm::BasicBlock* targetBb = nullptr;
+	getOrCreateCallTarget(*target, targetFnc, targetBb);
+	if (targetFnc == nullptr)
+	{
+		return false;
+	}
+	transformToCall(pseudo, targetFnc);
+	if (_c2l)
+	{
+		_jumpTargets.push(
+				*target,
+				JumpTarget::eType::CONTROL_FLOW_CALL_TARGET,
+				_c2l->getBasicMode(),
+				addr);
+	}
+	LOG << "\t\t" << "Griffin call @ " << addr << " -> " << *target << std::endl;
+	return true;
+}
+
+/**
+ * Merge only an unused placeholder fragment created by selected ranges. Real
+ * functions or functions with users are never merged by this helper.
+ */
+bool Decoder::mergeGriffinJumpTarget(
+		llvm::Function* targetFnc,
+		llvm::BasicBlock* targetBb,
+		llvm::Function* currentFnc)
+{
+	if (targetFnc == nullptr || targetBb == nullptr || currentFnc == nullptr
+			|| targetFnc == currentFnc
+			|| targetFnc->size() != 1
+			|| !targetFnc->use_empty()
+			|| !llvm::isa<llvm::ReturnInst>(targetBb->getTerminator()))
+	{
+		return false;
+	}
+
+	for (auto it = _addr2fnc.begin(); it != _addr2fnc.end();)
+	{
+		it = it->second == targetFnc ? _addr2fnc.erase(it) : ++it;
+	}
+	_fnc2addr.erase(targetFnc);
+	_fnc2sz.erase(targetFnc);
+	_terminatingFncs.erase(targetFnc);
+
+	targetBb->removeFromParent();
+	currentFnc->getBasicBlockList().push_back(targetBb);
+	targetFnc->eraseFromParent();
+	return true;
+}
+
+/** Branch to a proved target, merging placeholders instead of making a call. */
+bool Decoder::transformToGriffinJump(
+		common::Address addr,
+		llvm::CallInst* pseudo)
+{
+	if (_griffin == nullptr || pseudo == nullptr)
+	{
+		return false;
+	}
+	auto target = _griffin->getControlTarget(addr, "jmp");
+	if (!target)
+	{
+		return false;
+	}
+
+	auto* currentFnc = pseudo->getFunction();
+	llvm::Function* targetFnc = nullptr;
+	llvm::BasicBlock* targetBb = nullptr;
+	getOrCreateBranchTarget(*target, targetBb, targetFnc, pseudo);
+	if (targetBb && targetBb->getParent() == currentFnc && targetBb->getPrevNode())
+	{
+		transformToBranch(pseudo, targetBb);
+	}
+	else if (targetFnc
+			&& mergeGriffinJumpTarget(targetFnc, targetBb, currentFnc))
+	{
+		transformToBranch(pseudo, targetBb);
+	}
+	else
+	{
+		LOG << "\t\t" << "Griffin jmp target in another function @ "
+				<< *target << " -> leave unresolved" << std::endl;
+		return false;
+	}
+
+	if (_c2l)
+	{
+		_jumpTargets.push(
+				*target,
+				JumpTarget::eType::CONTROL_FLOW_BR_TRUE,
+				_c2l->getBasicMode(),
+				addr);
+	}
+	LOG << "\t\t" << "Griffin jmp @ " << addr << " -> " << *target << std::endl;
+	return true;
+}
+
 /**
  * Turn a dynamically proved Griffin ret-trampoline into an intra-function
  * branch. Never manufacture a call when the target belongs to another
@@ -593,6 +733,20 @@ bool Decoder::getJumpTargetsFromInstruction(
 	//
 	if (_c2l->isCallFunctionCall(pCall))
 	{
+		if (_griffin)
+		{
+			auto status = _griffin->getControlStatus(addr, "call");
+			if (status != GriffinSidecar::ControlStatus::Unknown)
+			{
+				if (status == GriffinSidecar::ControlStatus::Proven
+						&& transformToGriffinCall(addr, pCall))
+				{
+					return true;
+				}
+				// Rejected or unsafe targets never fall back to a guessed call.
+				return true;
+			}
+		}
 		auto t = getJumpTarget(addr, pCall, pCall->getArgOperand(0));
 		// TOOD: sometimes we want to enable calls (and other branches) to zero.
 
@@ -707,6 +861,20 @@ bool Decoder::getJumpTargetsFromInstruction(
 	//
 	else if (_c2l->isBranchFunctionCall(pCall))
 	{
+		if (_griffin)
+		{
+			auto status = _griffin->getControlStatus(addr, "jmp");
+			if (status != GriffinSidecar::ControlStatus::Unknown)
+			{
+				if (status == GriffinSidecar::ControlStatus::Proven
+						&& transformToGriffinJump(addr, pCall))
+				{
+					return true;
+				}
+				// Rejected or unsafe targets never become a call.
+				return true;
+			}
+		}
 		if (auto t = getJumpTarget(addr, pCall, pCall->getArgOperand(0)))
 		{
 			//.text:08001EE1    call    near ptr loc_8001EE1+1

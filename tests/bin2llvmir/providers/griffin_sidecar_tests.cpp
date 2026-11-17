@@ -103,6 +103,17 @@ TEST_F(GriffinSidecarV2Tests, witnessPromotesStaticAndDynamicVerifiedOnly)
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0x569140, "ret"));
 	EXPECT_FALSE(sidecar.getRetTrampolineTarget(TraceBase + 0x569140));
 	EXPECT_EQ(1, sidecar.getUnresolvedRetCount());
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+			sidecar.getControlStatus(TraceBase + 0x463ade, "call"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+			sidecar.getControlStatus(TraceBase + 0x58df90, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0x569140, "ret"));
+	ASSERT_TRUE(sidecar.getControlTarget(RuntimeBase + 0x463ade, "call"));
+	EXPECT_EQ(RuntimeBase + 0x2a9881,
+			*sidecar.getControlTarget(RuntimeBase + 0x463ade, "call"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+			sidecar.getControlStatus(RuntimeBase + 0x58df90, "jmp"));
 }
 
 TEST_F(GriffinSidecarV2Tests, migrationDoesNotPromoteHistoricalDynamicEdges)
@@ -141,6 +152,12 @@ TEST_F(GriffinSidecarV2Tests, rejectsScratchAmbiguousMultiTargetAndBadReplay)
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xbeef, "jmp"));
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xcafe, "jmp"));
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xdead, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0xbeef, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0xcafe, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0xdead, "jmp"));
 }
 
 class GriffinDecoderTests: public LlvmIrTests
@@ -273,6 +290,111 @@ class GriffinDecoderTests: public LlvmIrTests
 			EXPECT_EQ(2, fnc->size());
 			EXPECT_FALSE(verifyModule(*module, &errs()));
 		}
+
+		void prepareV2Decoder()
+		{
+			auto config = Config::empty(module.get());
+			config.getConfig().architecture.setName("x86-64");
+			decoder._module = module.get();
+			decoder._config = &config;
+			decoder._abi = AbiProvider::addAbi(module.get(), &config);
+			decoder._griffin = std::make_unique<GriffinSidecar>(
+					GriffinSidecar::fromFile(std::getenv("RETDEC_GRIFFIN_V2_WITNESS")));
+		}
+
+		void provedCallBecomesCall()
+		{
+			parseInput(R"(
+				declare void @__pseudo_call(i64)
+				define i64 @fnc() {
+				entry:
+					call void @__pseudo_call(i64 0)
+					ret i64 0
+				}
+				define i64 @target() {
+				entry:
+					ret i64 0
+				}
+			)");
+			prepareV2Decoder();
+			auto* targetFnc = getFunctionByName("target");
+			decoder._addr2fnc[TraceBase + ProvedTargetRva] = targetFnc;
+			decoder._fnc2addr[targetFnc] = TraceBase + ProvedTargetRva;
+			auto& entry = getFunctionByName("fnc")->getEntryBlock();
+			auto* pseudo = cast<CallInst>(&entry.front());
+			ASSERT_TRUE(decoder.transformToGriffinCall(
+					TraceBase + 0x463ade, pseudo));
+			auto it = entry.begin();
+			++it;
+			auto* realCall = cast<CallInst>(&*it);
+			EXPECT_EQ(targetFnc, realCall->getCalledFunction());
+		}
+
+		void provedJumpMergesPlaceholderWithoutCall()
+		{
+			parseInput(R"(
+				declare void @__pseudo_br(i64)
+				define i64 @fnc() {
+				entry:
+					call void @__pseudo_br(i64 0)
+					ret i64 0
+				}
+				define i64 @target() {
+				entry:
+					ret i64 0
+				}
+			)");
+			prepareV2Decoder();
+			auto* fnc = getFunctionByName("fnc");
+			auto* targetFnc = getFunctionByName("target");
+			auto* targetBb = &targetFnc->getEntryBlock();
+			decoder._addr2fnc[TraceBase + 0x27cee7] = targetFnc;
+			decoder._fnc2addr[targetFnc] = TraceBase + 0x27cee7;
+			decoder._addr2bb[TraceBase + 0x27cee7] = targetBb;
+			decoder._bb2addr[targetBb] = TraceBase + 0x27cee7;
+			auto& entry = fnc->getEntryBlock();
+			auto* pseudo = cast<CallInst>(&entry.front());
+			ASSERT_TRUE(decoder.transformToGriffinJump(
+					TraceBase + 0x58df90, pseudo));
+			auto* branch = cast<BranchInst>(entry.getTerminator());
+			EXPECT_EQ(fnc, branch->getSuccessor(0)->getParent());
+			EXPECT_EQ(2, module->getFunctionList().size());
+			EXPECT_EQ(1, std::count_if(entry.begin(), entry.end(),
+					[](const Instruction& i) { return isa<CallInst>(i); }));
+		}
+
+		void overlappingJumpTargetIsAllowed()
+		{
+			parseInput(R"(
+				declare void @__pseudo_br(i64)
+				define i64 @fnc() {
+				entry:
+					call void @__pseudo_br(i64 0)
+					ret i64 0
+				}
+				define i64 @target() {
+				entry:
+					ret i64 0
+				}
+			)");
+			prepareV2Decoder();
+			auto* fnc = getFunctionByName("fnc");
+			auto* targetFnc = getFunctionByName("target");
+			auto* targetBb = &targetFnc->getEntryBlock();
+			decoder._addr2fnc[TraceBase + 0x58df80] = targetFnc;
+			decoder._fnc2addr[targetFnc] = TraceBase + 0x58df80;
+			decoder._addr2bb[TraceBase + 0x58df80] = targetBb;
+			decoder._bb2addr[targetBb] = TraceBase + 0x58df80;
+			auto& entry = fnc->getEntryBlock();
+			auto* pseudo = cast<CallInst>(&entry.front());
+			ASSERT_TRUE(decoder.transformToGriffinJump(
+					TraceBase + 0x58df7f, pseudo));
+			auto* branch = cast<BranchInst>(entry.getTerminator());
+			EXPECT_EQ(fnc, branch->getSuccessor(0)->getParent());
+			EXPECT_EQ(2, fnc->size());
+			EXPECT_EQ(1, std::count_if(entry.begin(), entry.end(),
+					[](const Instruction& i) { return isa<CallInst>(i); }));
+		}
 };
 
 TEST_F(GriffinDecoderTests, provedRetTrampolineBecomesBranchNotReturn)
@@ -298,6 +420,21 @@ TEST_F(GriffinDecoderTests, disabledProviderKeepsGenericReturnFallback)
 TEST_F(GriffinDecoderTests, undecodedTargetIsCreatedOnlyInCurrentFunction)
 {
 	undecodedTargetStaysInCurrentFunction();
+}
+
+TEST_F(GriffinDecoderTests, provedCallBecomesCall)
+{
+	provedCallBecomesCall();
+}
+
+TEST_F(GriffinDecoderTests, provedJumpMergesPlaceholderWithoutCall)
+{
+	provedJumpMergesPlaceholderWithoutCall();
+}
+
+TEST_F(GriffinDecoderTests, overlappingJumpTargetIsAllowed)
+{
+	overlappingJumpTargetIsAllowed();
 }
 
 } // namespace tests

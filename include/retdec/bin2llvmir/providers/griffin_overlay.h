@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -27,6 +28,10 @@ class GriffinOverlay
 
 		bool checkImageSha256(const std::string& actualSha256) const;
 		std::size_t applyTo(loader::Image& image, uint64_t imageBase) const;
+		std::optional<uint64_t> getRequiredEnd(uint64_t rva) const;
+		std::optional<uint64_t> getRequiredRangeEnd(
+				uint64_t startRva,
+				uint64_t currentEndRva) const;
 
 		std::size_t getEntryCount() const;
 		std::size_t getAppliedByteCount() const;

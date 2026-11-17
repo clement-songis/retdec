@@ -264,6 +264,37 @@ std::size_t GriffinOverlay::applyTo(loader::Image& image, uint64_t imageBase) co
 	return _entries.size();
 }
 
+std::optional<uint64_t> GriffinOverlay::getRequiredEnd(uint64_t rva) const
+{
+	auto it = _entries.find(rva);
+	if (it == _entries.end())
+	{
+		return std::nullopt;
+	}
+	return rva + it->second.data.size();
+}
+
+std::optional<uint64_t> GriffinOverlay::getRequiredRangeEnd(
+		uint64_t startRva,
+		uint64_t currentEndRva) const
+{
+	std::optional<uint64_t> result;
+	for (const auto& item : _entries)
+	{
+		if (item.first != startRva
+				&& (item.first < startRva || item.first >= currentEndRva))
+		{
+			continue;
+		}
+		uint64_t end = item.first + item.second.data.size();
+		if (!result || end > *result)
+		{
+			result = end;
+		}
+	}
+	return result;
+}
+
 std::size_t GriffinOverlay::getEntryCount() const
 {
 	return _entries.size();

@@ -195,7 +195,7 @@ GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
 	{
 		throw std::runtime_error("empty Griffin imageSize");
 	}
-	for (const char* name : {"preferredTraceBase", "runtimeImageBase"})
+	for (const char* name : {"staticImageBase", "preferredTraceBase", "runtimeImageBase"})
 	{
 		auto it = model.FindMember(name);
 		if (it != model.MemberEnd())
@@ -414,8 +414,43 @@ GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
 		{
 			result._unresolvedRets.insert(source);
 		}
+		if (result._evidenceV2 && !proved)
+		{
+			result._rejectedControlTargets[source] = kind;
+		}
 	}
 	return result;
+}
+
+GriffinSidecar::ControlStatus GriffinSidecar::getControlStatus(
+		Address site,
+		const std::string& kind) const
+{
+	if (site.isUndefined())
+	{
+		return ControlStatus::Unknown;
+	}
+	for (uint64_t base : _bases)
+	{
+		uint64_t value = site.getValue();
+		if (value < base || value - base >= _imageSize)
+		{
+			continue;
+		}
+		uint64_t source = value - base;
+		if (_controlTargets.count(source)
+				&& _controlTargets.at(source).kind == kind)
+		{
+			return ControlStatus::Proven;
+		}
+		if (_rejectedControlTargets.count(source)
+				&& _rejectedControlTargets.at(source) == kind)
+		{
+			return ControlStatus::Rejected;
+		}
+		return ControlStatus::Unknown;
+	}
+	return ControlStatus::Unknown;
 }
 
 std::optional<Address> GriffinSidecar::getTarget(

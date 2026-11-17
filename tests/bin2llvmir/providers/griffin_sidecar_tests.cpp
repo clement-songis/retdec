@@ -9,6 +9,7 @@
 
 #include "bin2llvmir/utils/llvmir_tests.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder.h"
+#include "retdec/bin2llvmir/providers/griffin_overlay.h"
 #include "retdec/bin2llvmir/providers/griffin_sidecar.h"
 
 using namespace ::testing;
@@ -355,7 +356,7 @@ class GriffinDecoderTests: public LlvmIrTests
 			auto& entry = fnc->getEntryBlock();
 			auto* pseudo = cast<CallInst>(&entry.front());
 			ASSERT_TRUE(decoder.transformToGriffinJump(
-					TraceBase + 0x58df90, pseudo));
+					TraceBase + 0x58df90, pseudo, TraceBase + 0x58df92));
 			auto* branch = cast<BranchInst>(entry.getTerminator());
 			EXPECT_EQ(fnc, branch->getSuccessor(0)->getParent());
 			EXPECT_EQ(2, module->getFunctionList().size());
@@ -375,6 +376,13 @@ class GriffinDecoderTests: public LlvmIrTests
 				define i64 @target() {
 				entry:
 					ret i64 0
+				extra:
+					ret i64 0
+				}
+				define void @caller() {
+				entry:
+					%0 = call i64 @target()
+					ret void
 				}
 			)");
 			prepareV2Decoder();
@@ -388,12 +396,37 @@ class GriffinDecoderTests: public LlvmIrTests
 			auto& entry = fnc->getEntryBlock();
 			auto* pseudo = cast<CallInst>(&entry.front());
 			ASSERT_TRUE(decoder.transformToGriffinJump(
-					TraceBase + 0x58df7f, pseudo));
+					TraceBase + 0x58df7f, pseudo, TraceBase + 0x58df81));
 			auto* branch = cast<BranchInst>(entry.getTerminator());
 			EXPECT_EQ(fnc, branch->getSuccessor(0)->getParent());
 			EXPECT_EQ(2, fnc->size());
+			EXPECT_NE(nullptr, getFunctionByName("target"));
+			EXPECT_FALSE(verifyModule(*module, &errs()));
 			EXPECT_EQ(1, std::count_if(entry.begin(), entry.end(),
 					[](const Instruction& i) { return isa<CallInst>(i); }));
+		}
+
+		void overlappedTargetRangeSurvivesAndRejectedRetDoesNot()
+		{
+			decoder._griffin = std::make_unique<GriffinSidecar>(
+					GriffinSidecar::fromFile(std::getenv("RETDEC_GRIFFIN_V2_WITNESS")));
+			decoder._griffinOverlay = std::make_unique<GriffinOverlay>(
+					GriffinOverlay::fromFile(std::getenv("RETDEC_GRIFFIN_OVERLAY")));
+			auto start = RuntimeBase + 0x58df7f;
+			auto end = RuntimeBase + 0x58df81;
+			decoder._ranges.addPrimary(start, end);
+
+			decoder.removeDecodedRange(start, end, false);
+
+			auto* preserved = decoder._ranges.getPrimary(RuntimeBase + 0x58df80);
+			ASSERT_NE(nullptr, preserved);
+			EXPECT_EQ(RuntimeBase + 0x58df80, preserved->getStart());
+			EXPECT_EQ(end, preserved->getEnd());
+
+			auto rejected = RuntimeBase + 0x569140;
+			decoder._ranges.addPrimary(rejected, rejected + 1);
+			decoder.removeDecodedRange(rejected, rejected + 1, false);
+			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(rejected));
 		}
 };
 
@@ -435,6 +468,11 @@ TEST_F(GriffinDecoderTests, provedJumpMergesPlaceholderWithoutCall)
 TEST_F(GriffinDecoderTests, overlappingJumpTargetIsAllowed)
 {
 	overlappingJumpTargetIsAllowed();
+}
+
+TEST_F(GriffinDecoderTests, overlappedTargetRangeSurvivesAndRejectedRetDoesNot)
+{
+	overlappedTargetRangeSurvivesAndRejectedRetDoesNot();
 }
 
 } // namespace tests

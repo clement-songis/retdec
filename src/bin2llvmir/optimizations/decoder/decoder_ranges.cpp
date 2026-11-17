@@ -63,6 +63,18 @@ void RangesToDecode::remove(common::Address s, common::Address e)
 	_alternativeRanges.remove(s, e);
 }
 
+void RangesToDecode::removePrimary(common::Address s, common::Address e)
+{
+	e = align(e, archInsnAlign);
+	_primaryRanges.remove(s, e);
+}
+
+void RangesToDecode::removeAlternative(common::Address s, common::Address e)
+{
+	e = align(e, archInsnAlign);
+	_alternativeRanges.remove(s, e);
+}
+
 void RangesToDecode::remove(const common::AddressRange& r)
 {
 	remove(r.getStart(), r.getEnd());

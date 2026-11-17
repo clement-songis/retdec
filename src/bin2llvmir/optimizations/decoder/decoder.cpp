@@ -220,6 +220,35 @@ bool Decoder::getJumpTarget(JumpTarget& jt)
 	return false;
 }
 
+void Decoder::removeDecodedRange(
+		common::Address start,
+		common::Address end,
+		bool alternative)
+{
+	if (!_griffinOverlay)
+	{
+		_ranges.remove(start, end);
+		return;
+	}
+	if (alternative)
+	{
+		_ranges.removeAlternative(start, end);
+		return;
+	}
+
+	// `eb ff` jumps to its own second byte. Preserve that exact target and
+	// the rest of the range instead of consuming it with the first decoding.
+	auto target = _griffin ? _griffin->getControlTarget(start, "jmp")
+			: std::optional<common::Address>();
+	auto* range = _ranges.getPrimary(start);
+	auto preserveEnd = range ? range->getEnd() : end;
+	_ranges.removePrimary(start, end);
+	if (target && *target > start && *target < end)
+	{
+		_ranges.addPrimary(*target, preserveEnd);
+	}
+}
+
 void Decoder::decodeJumpTarget(const JumpTarget& jt)
 {
 	const Address start = jt.getAddress();
@@ -276,7 +305,9 @@ void Decoder::decodeJumpTarget(const JumpTarget& jt)
 			{
 				auto rangeStart = range->getStart();
 				auto rangeEnd = range->getEnd();
-				_ranges.remove(rangeStart, rangeEnd);
+				// Extending an overlay range must not erase its alternative
+				// decoding, which can start on the following overlapped byte.
+				_ranges.removePrimary(rangeStart, rangeEnd);
 				_ranges.addPrimary(rangeStart, *requiredEnd);
 				range = _ranges.getPrimary(start);
 			}
@@ -392,6 +423,24 @@ void Decoder::decodeJumpTarget(const JumpTarget& jt)
 		}
 		_somethingDecoded = true;
 
+		// Preserve the memory effects of captured overlay instructions. Without
+		// this, stack cleanup can erase a proved push after successful decoding.
+		if (_griffinOverlay && res.llvmInsn)
+		{
+			auto base = _image->getImage()->getBaseAddress();
+			if (_griffinOverlay->getRequiredEnd(oldAddr.getValue() - base))
+			{
+				auto* bb = res.llvmInsn->getParent();
+				for (auto it = res.llvmInsn->getIterator(); it != bb->end(); ++it)
+				{
+					if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&*it))
+					{
+						store->setVolatile(true);
+					}
+				}
+			}
+		}
+
 		_llvm2capstone->emplace(res.llvmInsn, res.capstoneInsn);
 
 		bbEnd |= getJumpTargetsFromInstruction(oldAddr, res, bytes.second);
@@ -403,7 +452,7 @@ void Decoder::decodeJumpTarget(const JumpTarget& jt)
 	while (!bbEnd);
 
 	auto end = addr > start ? addr : Address(start+1);
-	_ranges.remove(start, end);
+	removeDecodedRange(start, end, alternative);
 	LOG << "\t\tdecoded range = " << AddressRange(start, end) << std::endl;
 }
 
@@ -583,11 +632,16 @@ bool Decoder::mergeGriffinJumpTarget(
 {
 	if (targetFnc == nullptr || targetBb == nullptr || currentFnc == nullptr
 			|| targetFnc == currentFnc
-			|| targetFnc->size() != 1
-			|| !targetFnc->use_empty()
-			|| !llvm::isa<llvm::ReturnInst>(targetBb->getTerminator()))
+			|| !targetFnc->use_empty())
 	{
 		return false;
+	}
+	for (const auto& bb : *targetFnc)
+	{
+		if (!llvm::isa<llvm::ReturnInst>(bb.getTerminator()))
+		{
+			return false;
+		}
 	}
 
 	for (auto it = _addr2fnc.begin(); it != _addr2fnc.end();)
@@ -598,16 +652,59 @@ bool Decoder::mergeGriffinJumpTarget(
 	_fnc2sz.erase(targetFnc);
 	_terminatingFncs.erase(targetFnc);
 
-	targetBb->removeFromParent();
-	currentFnc->getBasicBlockList().push_back(targetBb);
+	while (!targetFnc->empty())
+	{
+		auto* bb = &targetFnc->front();
+		bb->removeFromParent();
+		currentFnc->getBasicBlockList().push_back(bb);
+	}
 	targetFnc->eraseFromParent();
+	return true;
+}
+
+bool Decoder::cloneGriffinJumpTargetPlaceholder(
+		llvm::Function* targetFnc,
+		llvm::BasicBlock*& targetBb,
+		llvm::Function* currentFnc,
+		common::Address target)
+{
+	if (targetFnc == nullptr || targetBb == nullptr || currentFnc == nullptr
+			|| targetFnc == currentFnc
+			|| targetFnc->getReturnType() != currentFnc->getReturnType())
+	{
+		return false;
+	}
+	for (const auto& bb : *targetFnc)
+	{
+		if (!llvm::isa<llvm::ReturnInst>(bb.getTerminator()))
+		{
+			return false;
+		}
+	}
+	auto* oldRet = llvm::cast<llvm::ReturnInst>(targetBb->getTerminator());
+	if (oldRet->getReturnValue()
+			&& !llvm::isa<llvm::Constant>(oldRet->getReturnValue()))
+	{
+		return false;
+	}
+
+	// The original function may have users. Keep it untouched and create an
+	// independent placeholder for this overlapped Griffin jump target.
+	auto* cloned = llvm::BasicBlock::Create(
+			_module->getContext(), names::generateBasicBlockName(target), currentFnc);
+	llvm::ReturnInst::Create(
+			_module->getContext(), oldRet->getReturnValue(), cloned);
+	targetBb = cloned;
+	_addr2bb[target] = cloned;
+	_bb2addr[cloned] = target;
 	return true;
 }
 
 /** Branch to a proved target, merging placeholders instead of making a call. */
 bool Decoder::transformToGriffinJump(
 		common::Address addr,
-		llvm::CallInst* pseudo)
+		llvm::CallInst* pseudo,
+		common::Address nextAddr)
 {
 	if (_griffin == nullptr || pseudo == nullptr)
 	{
@@ -620,15 +717,48 @@ bool Decoder::transformToGriffinJump(
 	}
 
 	auto* currentFnc = pseudo->getFunction();
+	bool overlap = *target > addr && *target < nextAddr;
 	llvm::Function* targetFnc = nullptr;
 	llvm::BasicBlock* targetBb = nullptr;
+	if (overlap)
+	{
+		// `eb ff` targets its own second byte. Do not let the ordinary
+		// function-fragment logic consume that address before this branch.
+		targetBb = getBasicBlockAtAddress(*target);
+		if (targetBb && targetBb->getParent() != currentFnc
+				&& !cloneGriffinJumpTargetPlaceholder(
+						targetBb->getParent(), targetBb, currentFnc, *target))
+		{
+			return false;
+		}
+		if (targetBb == nullptr)
+		{
+			targetBb = createBasicBlock(*target, currentFnc);
+		}
+		if (!targetBb->getPrevNode())
+		{
+			return false;
+		}
+		transformToBranch(pseudo, targetBb);
+		if (_c2l)
+		{
+			_jumpTargets.push(
+					*target,
+					JumpTarget::eType::CONTROL_FLOW_BR_TRUE,
+					_c2l->getBasicMode(),
+					addr);
+		}
+		return true;
+	}
 	getOrCreateBranchTarget(*target, targetBb, targetFnc, pseudo);
 	if (targetBb && targetBb->getParent() == currentFnc && targetBb->getPrevNode())
 	{
 		transformToBranch(pseudo, targetBb);
 	}
 	else if (targetFnc
-			&& mergeGriffinJumpTarget(targetFnc, targetBb, currentFnc))
+			&& (mergeGriffinJumpTarget(targetFnc, targetBb, currentFnc)
+					|| cloneGriffinJumpTargetPlaceholder(
+							targetFnc, targetBb, currentFnc, *target)))
 	{
 		transformToBranch(pseudo, targetBb);
 	}
@@ -867,7 +997,7 @@ bool Decoder::getJumpTargetsFromInstruction(
 			if (status != GriffinSidecar::ControlStatus::Unknown)
 			{
 				if (status == GriffinSidecar::ControlStatus::Proven
-						&& transformToGriffinJump(addr, pCall))
+						&& transformToGriffinJump(addr, pCall, nextAddr))
 				{
 					return true;
 				}

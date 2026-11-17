@@ -24,6 +24,10 @@ class RangesToDecode
 		void addAlternative(const common::AddressRange& r);
 		void promoteAlternativeToPrimary();
 
+		// Used by opt-in overlays when extending a selected range: alternative
+		// decodings must survive, notably the byte after `eb ff`.
+		void removePrimary(common::Address s, common::Address e);
+		void removeAlternative(common::Address s, common::Address e);
 		void remove(common::Address s, common::Address e);
 		void remove(const common::AddressRange& r);
 		void removeZeroSequences(FileImage* image);

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "bin2llvmir/utils/llvmir_tests.h"
+#include "retdec/bin2llvmir/optimizations/decoder/decoder_ranges.h"
 #include "retdec/bin2llvmir/providers/griffin_overlay.h"
 
 using namespace ::testing;
@@ -98,6 +99,24 @@ TEST_F(GriffinOverlayTests, overlappingDifferentBytesAreRejected)
 	EXPECT_THROW(
 			GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST),
 			std::runtime_error);
+}
+
+TEST_F(GriffinOverlayTests, rangeExtensionPreservesAlternativeDecoding)
+{
+	RangesToDecode ranges;
+	ranges.addPrimary(0x1000, 0x1002);
+	ranges.addAlternative(0x1001, 0x1003);
+
+	ranges.removePrimary(0x1000, 0x1002);
+
+	EXPECT_EQ(nullptr, ranges.getPrimary(0x1000));
+	auto* alternative = ranges.getAlternative(0x1001);
+	ASSERT_NE(nullptr, alternative);
+	EXPECT_EQ(0x1001, alternative->getStart());
+	EXPECT_EQ(0x1003, alternative->getEnd());
+
+	ranges.removeAlternative(0x1001, 0x1003);
+	EXPECT_EQ(nullptr, ranges.getAlternative(0x1001));
 }
 
 } // namespace tests

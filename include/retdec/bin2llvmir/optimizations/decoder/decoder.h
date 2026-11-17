@@ -92,6 +92,10 @@ class Decoder : public llvm::ModulePass
 		void decode();
 		bool getJumpTarget(JumpTarget& jt);
 		void decodeJumpTarget(const JumpTarget& jt);
+		void removeDecodedRange(
+				common::Address start,
+				common::Address end,
+				bool alternative);
 		std::size_t decodeJumpTargetDryRun(
 				const JumpTarget& jt,
 				ByteData bytes,
@@ -141,11 +145,17 @@ class Decoder : public llvm::ModulePass
 				llvm::CallInst* pseudo);
 		bool transformToGriffinJump(
 				common::Address addr,
-				llvm::CallInst* pseudo);
+				llvm::CallInst* pseudo,
+				common::Address nextAddr);
 		bool mergeGriffinJumpTarget(
 				llvm::Function* targetFnc,
 				llvm::BasicBlock* targetBb,
 				llvm::Function* currentFnc);
+		bool cloneGriffinJumpTargetPlaceholder(
+				llvm::Function* targetFnc,
+				llvm::BasicBlock*& targetBb,
+				llvm::Function* currentFnc,
+				common::Address target);
 
 		// Focused unit tests for proved, unknown and cross-function targets.
 		friend class tests::GriffinDecoderTests;

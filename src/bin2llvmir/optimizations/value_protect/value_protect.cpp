@@ -666,6 +666,10 @@ bool ValueProtect::unprotect()
 
 				if (auto* s = dyn_cast<StoreInst>(uu))
 				{
+					if (s->isVolatile())
+					{
+						continue;
+					}
 					s->eraseFromParent();
 					changed = true;
 				}

@@ -8,11 +8,16 @@
 #include <map>
 #include <vector>
 
+#include <llvm/IR/InstIterator.h>
+
 #include "bin2llvmir/utils/llvmir_tests.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder_ranges.h"
+#include "retdec/bin2llvmir/optimizations/value_protect/value_protect.h"
+#include "retdec/bin2llvmir/providers/abi/x86.h"
 #include "retdec/bin2llvmir/providers/griffin_overlay.h"
 
 using namespace ::testing;
+using namespace llvm;
 
 namespace retdec {
 namespace bin2llvmir {
@@ -117,6 +122,47 @@ TEST_F(GriffinOverlayTests, rangeExtensionPreservesAlternativeDecoding)
 
 	ranges.removeAlternative(0x1001, 0x1003);
 	EXPECT_EQ(nullptr, ranges.getAlternative(0x1001));
+}
+
+TEST_F(GriffinOverlayTests, volatileStackStoreSurvivesValueProtectUnprotect)
+{
+	parseInput(R"(
+		define i64 @fnc() {
+		entry:
+			%stack_var = alloca i64
+			ret i64 0
+		}
+	)");
+	auto c = Config::empty(module.get());
+	c.getConfig().architecture.setIsX86();
+	AbiX86 abi(module.get(), &c);
+	ValueProtect pass;
+
+	ASSERT_TRUE(pass.runOnModuleCustom(*module, &c, &abi));
+	auto* fnc = getFunctionByName("fnc");
+	StoreInst* protectedStore = nullptr;
+	for (auto& instruction : instructions(fnc))
+	{
+		if (auto* store = dyn_cast<StoreInst>(&instruction))
+		{
+			protectedStore = store;
+		}
+	}
+	ASSERT_NE(nullptr, protectedStore);
+	protectedStore->setVolatile(true);
+
+	ASSERT_TRUE(pass.runOnModuleCustom(*module, &c, &abi));
+	bool found = false;
+	for (auto& instruction : instructions(fnc))
+	{
+		if (auto* store = dyn_cast<StoreInst>(&instruction);
+				store && store->isVolatile())
+		{
+			found = true;
+		}
+	}
+	EXPECT_TRUE(found);
+	EXPECT_FALSE(verifyModule(*module, &errs()));
 }
 
 } // namespace tests

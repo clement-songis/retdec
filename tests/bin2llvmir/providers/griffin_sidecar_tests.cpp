@@ -75,6 +75,74 @@ TEST_F(GriffinSidecarTests, realSidecarHasNoProvedRetYet)
 	EXPECT_FALSE(sidecar.getRetTrampolineTarget(RuntimeBase + ProvedSiteRva));
 }
 
+class GriffinSidecarV2Tests: public LlvmIrTests
+{
+};
+
+TEST_F(GriffinSidecarV2Tests, witnessPromotesStaticAndDynamicVerifiedOnly)
+{
+	const char* path = std::getenv("RETDEC_GRIFFIN_V2_WITNESS");
+	if (path == nullptr)
+	{
+		GTEST_SKIP() << "RETDEC_GRIFFIN_V2_WITNESS not set";
+	}
+	auto sidecar = GriffinSidecar::fromFile(path);
+
+	ASSERT_TRUE(sidecar.isEvidenceV2());
+	EXPECT_TRUE(sidecar.checkImageSha256(
+			"c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390"));
+	EXPECT_FALSE(sidecar.checkImageSha256(std::string(64, '0')));
+	EXPECT_EQ(5, sidecar.getControlTargetCount());
+	EXPECT_EQ(1, sidecar.getDynamicVerifiedTargetCount());
+	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
+	EXPECT_EQ(TraceBase + 0x2a9881,
+			*sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
+	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x58df90, "jmp"));
+	EXPECT_EQ(TraceBase + 0x27cee7,
+			*sidecar.getControlTarget(TraceBase + 0x58df90, "jmp"));
+	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0x569140, "ret"));
+	EXPECT_FALSE(sidecar.getRetTrampolineTarget(TraceBase + 0x569140));
+	EXPECT_EQ(1, sidecar.getUnresolvedRetCount());
+}
+
+TEST_F(GriffinSidecarV2Tests, migrationDoesNotPromoteHistoricalDynamicEdges)
+{
+	const char* path = std::getenv("RETDEC_GRIFFIN_V2_MIGRATED");
+	if (path == nullptr)
+	{
+		GTEST_SKIP() << "RETDEC_GRIFFIN_V2_MIGRATED not set";
+	}
+	auto sidecar = GriffinSidecar::fromFile(path);
+
+	EXPECT_EQ(30, sidecar.getControlTargetCount());
+	EXPECT_EQ(0, sidecar.getDynamicVerifiedTargetCount());
+	// One of the 38 historical dynamic edges without a complete context.
+	EXPECT_FALSE(sidecar.getControlTarget(RuntimeBase + 0xf7daed, "call"));
+	ASSERT_TRUE(sidecar.getControlTarget(RuntimeBase + 0x463ade, "call"));
+	EXPECT_EQ(RuntimeBase + 0x2a9881,
+			*sidecar.getControlTarget(RuntimeBase + 0x463ade, "call"));
+	EXPECT_FALSE(sidecar.getRetTrampolineTarget(RuntimeBase + 0x569140));
+	EXPECT_EQ(25, sidecar.getUnresolvedRetCount());
+}
+
+TEST_F(GriffinSidecarV2Tests, rejectsScratchAmbiguousMultiTargetAndBadReplay)
+{
+	auto sidecar = GriffinSidecar::fromFile(RETDEC_GRIFFIN_V2_TEST_SIDECAR);
+
+	EXPECT_TRUE(sidecar.checkImageSha256(
+			"c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390"));
+	EXPECT_FALSE(sidecar.checkImageSha256(std::string(64, '0')));
+	EXPECT_EQ(1, sidecar.getControlTargetCount());
+	EXPECT_EQ(0, sidecar.getDynamicVerifiedTargetCount());
+	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
+	EXPECT_EQ(TraceBase + 0x2a9881,
+			*sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
+	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0x569140, "ret"));
+	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xbeef, "jmp"));
+	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xcafe, "jmp"));
+	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xdead, "jmp"));
+}
+
 class GriffinDecoderTests: public LlvmIrTests
 {
 	protected:

@@ -109,8 +109,13 @@ bool Decoder::run()
 	auto& griffinPath = _config->getConfig().parameters.getGriffinSidecar();
 	if (!griffinPath.empty())
 	{
-		_griffin = std::make_unique<GriffinSidecar>(
-				GriffinSidecar::fromFile(griffinPath));
+		auto sidecar = GriffinSidecar::fromFile(griffinPath);
+		if (!sidecar.checkImageSha256(_image->getFileFormat()->getSha256()))
+		{
+			throw std::runtime_error(
+					"Griffin sidecar image SHA256 does not match the input binary");
+		}
+		_griffin = std::make_unique<GriffinSidecar>(std::move(sidecar));
 		LOG << "Griffin sidecar: " << _griffin->getRetTargetCount()
 				<< " proved ret-trampolines, "
 				<< _griffin->getUnresolvedRetCount() << " unresolved rets\n";

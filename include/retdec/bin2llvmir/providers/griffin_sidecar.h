@@ -32,15 +32,37 @@ class GriffinSidecar
 	public:
 		static GriffinSidecar fromFile(const std::string& path);
 
+		std::optional<common::Address> getControlTarget(
+				common::Address site,
+				const std::string& kind) const;
 		std::optional<common::Address> getRetTrampolineTarget(
 				common::Address site) const;
 
+		bool checkImageSha256(const std::string& actualSha256) const;
+		bool isEvidenceV2() const;
+		std::size_t getControlTargetCount() const;
+		std::size_t getDynamicVerifiedTargetCount() const;
 		std::size_t getRetTargetCount() const;
 		std::size_t getUnresolvedRetCount() const;
 
 	private:
+		struct ControlTarget
+		{
+			uint64_t targetRva = 0;
+			std::string kind;
+			std::string classification;
+		};
+
+		std::optional<common::Address> getTarget(
+				common::Address site,
+				const std::string& kind) const;
+
 		std::vector<uint64_t> _bases;
 		uint64_t _imageSize = 0;
+		bool _evidenceV2 = false;
+		std::string _imageSha256;
+		std::map<uint64_t, ControlTarget> _controlTargets;
+		std::size_t _dynamicVerifiedTargetCount = 0;
 		std::map<uint64_t, uint64_t> _retTargets;
 		std::set<uint64_t> _unresolvedRets;
 };

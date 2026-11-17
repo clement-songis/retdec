@@ -36,6 +36,7 @@ target_include_directories(tests-bin2llvmir
 target_compile_definitions(tests-bin2llvmir
 	PRIVATE
 		RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json"
+		RETDEC_GRIFFIN_V2_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_v2_test.json"
 )
 
 target_link_libraries(tests-bin2llvmir
@@ -55,7 +56,8 @@ add_executable(tests-griffin
 	providers/griffin_sidecar_tests.cpp)
 target_include_directories(tests-griffin PRIVATE ${RETDEC_TESTS_DIR})
 target_compile_definitions(tests-griffin PRIVATE
-	RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json")
+	RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json"
+	RETDEC_GRIFFIN_V2_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_v2_test.json")
 target_link_libraries(tests-griffin
 	retdec::bin2llvmir
 	retdec::utils

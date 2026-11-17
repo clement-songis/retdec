@@ -1,0 +1,109 @@
+{
+  "format": "retdec-griffin-evidence-v2",
+  "addressModel": {
+    "key": "RVA",
+    "preferredTraceBase": "0x140000000",
+    "runtimeImageBase": "0xfffff802b93d0000",
+    "imageSize": "0x6bb1000"
+  },
+  "image": {
+    "path": "samples/vgk_12nov_decrypted.bin",
+    "sha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+    "layout": "rva"
+  },
+  "observations": [
+    {
+      "observationId": "static-ok",
+      "sourceRva": "0x463ade",
+      "targetRva": "0x2a9881",
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+      "classification": "static",
+      "staticTargetRva": "0x2a9881",
+      "replay": {"status": "match", "actualTargetRva": "0x2a9881"}
+    },
+    {
+      "observationId": "scratch-no",
+      "sourceRva": "0x569140",
+      "targetRva": "0x0",
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+      "classification": "dynamic-scratch",
+      "context": {"complete": true},
+      "replay": {"status": "match", "actualTargetRva": "0x0"},
+      "scratch-taint": {"tainted": true, "unknown": false}
+    },
+    {
+      "observationId": "ambiguous-no",
+      "sourceRva": "0xbeef",
+      "targetRva": "0x27cee7",
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+      "classification": "ambiguous"
+    },
+    {
+      "observationId": "multi-no",
+      "sourceRva": "0xcafe",
+      "targetRva": "0x27cee7",
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+      "classification": "dynamic-verified",
+      "context": {"complete": true},
+      "replay": {"status": "match", "actualTargetRva": "0x27cee7"},
+      "scratch-taint": {"tainted": false, "unknown": false}
+    },
+    {
+      "observationId": "replay-no",
+      "sourceRva": "0xdead",
+      "targetRva": "0x27cee7",
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+      "classification": "dynamic-verified",
+      "context": {"complete": true},
+      "replay": {"status": "mismatch", "actualTargetRva": "0x27cee7"},
+      "scratch-taint": {"tainted": false, "unknown": false}
+    }
+  ],
+  "controlFlowSites": [
+    {
+      "siteRva": "0x463ade",
+      "kind": "call",
+      "targetRva": "0x2a9881",
+      "targets": ["0x2a9881"],
+      "classification": "static",
+      "providerEligible": true,
+      "observationIds": ["static-ok"]
+    },
+    {
+      "siteRva": "0x569140",
+      "kind": "ret",
+      "targetRva": "0x0",
+      "targets": ["0x0"],
+      "classification": "dynamic-scratch",
+      "providerEligible": true,
+      "observationIds": ["scratch-no"]
+    },
+    {
+      "siteRva": "0xbeef",
+      "kind": "jmp",
+      "targetRva": "0x27cee7",
+      "targets": ["0x27cee7"],
+      "classification": "ambiguous",
+      "providerEligible": true,
+      "observationIds": ["ambiguous-no"]
+    },
+    {
+      "siteRva": "0xcafe",
+      "kind": "jmp",
+      "targetRva": "0x27cee7",
+      "targets": ["0x27cee7", "0x2a9881"],
+      "classification": "dynamic-verified",
+      "providerEligible": true,
+      "observationIds": ["multi-no"]
+    },
+    {
+      "siteRva": "0xdead",
+      "kind": "jmp",
+      "targetRva": "0x27cee7",
+      "targets": ["0x27cee7"],
+      "classification": "dynamic-verified",
+      "providerEligible": true,
+      "observationIds": ["replay-no"]
+    }
+  ]
+}

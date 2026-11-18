@@ -24,6 +24,21 @@ class InstructionOptimizerTests: public LlvmIrTests
 {
 	protected:
 		InstructionOptimizer pass;
+
+		unsigned flagStores(const char* functionName = "fnc")
+		{
+			unsigned count = 0;
+			for (auto& bb : *module->getFunction(functionName))
+			for (auto& insn : bb)
+			{
+				auto* store = dyn_cast<StoreInst>(&insn);
+				if (store && store->getPointerOperand()->getName() == "zf")
+				{
+					++count;
+				}
+			}
+			return count;
+		}
 };
 
 //
@@ -59,6 +74,107 @@ TEST_F(InstructionOptimizerTests, optimizationReturnsTrue)
 	)";
 	checkModuleAgainstExpectedIr(exp);
 	EXPECT_TRUE(ret);
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessRemovesOverwrittenStore)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		define void @fnc() {
+			store i1 true, i1* @zf
+			store i1 false, i1* @zf
+			ret void
+		}
+	)");
+	EXPECT_TRUE(pass.runOnModuleCustom(*module));
+	EXPECT_EQ(1, flagStores());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessPreservesLoadsAndCalls)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		declare void @g()
+		define void @fnc() {
+			store i1 true, i1* @zf
+			%v = load i1, i1* @zf
+			call void @g()
+			store i1 false, i1* @zf
+			ret void
+		}
+	)");
+	pass.runOnModuleCustom(*module);
+	EXPECT_EQ(2, flagStores());
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessJoinsBranchesConservatively)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		define void @fnc(i1 %cond) {
+		entry:
+			store i1 true, i1* @zf
+			br i1 %cond, label %read, label %overwrite
+		read:
+			%v = load i1, i1* @zf
+			ret void
+		overwrite:
+			store i1 false, i1* @zf
+			ret void
+		}
+	)");
+	pass.runOnModuleCustom(*module);
+	EXPECT_EQ(2, flagStores());
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessSkipsEscapedAndVolatileStorage)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		@escape = global i1* @zf
+		define void @fnc() {
+			store i1 true, i1* @zf
+			store i1 false, i1* @zf
+			ret void
+		}
+	)");
+	pass.runOnModuleCustom(*module);
+	EXPECT_EQ(2, flagStores());
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessSkipsVolatileStorage)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		define void @fnc() {
+			store volatile i1 true, i1* @zf
+			store i1 false, i1* @zf
+			ret void
+		}
+	)");
+	pass.runOnModuleCustom(*module);
+	EXPECT_EQ(2, flagStores());
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessRemovesEntryStoreWhenAllBranchesOverwrite)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		define void @fnc(i1 %cond) {
+		entry:
+			store i1 true, i1* @zf
+			br i1 %cond, label %left, label %right
+		left:
+			store i1 false, i1* @zf
+			ret void
+		right:
+			store i1 true, i1* @zf
+			ret void
+		}
+	)");
+	EXPECT_TRUE(pass.runOnModuleCustom(*module));
+	EXPECT_EQ(2, flagStores());
 }
 
 } // namespace tests

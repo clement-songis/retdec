@@ -309,6 +309,201 @@
         "role": "vm-spill",
         "displacement": "0x20"
       }
+    },
+    {
+      "observationId": "incomplete-context",
+      "run": "fixture",
+      "sourceRva": "0x1060",
+      "targetRva": "0x2000",
+      "targetVa": "0x140002000",
+      "mnemonic": "call",
+      "text": "call qword ptr [rsp + 0x20]",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": false,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": [
+          {
+            "address": "0x7000000020",
+            "data": "0020004001000000",
+            "size": 8
+          }
+        ]
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x2000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stackSlot": {
+        "role": "abi-frame",
+        "displacement": "0x20"
+      }
+    },
+    {
+      "observationId": "tainted-scratch",
+      "run": "fixture",
+      "sourceRva": "0x1068",
+      "targetRva": "0x2000",
+      "targetVa": "0x140002000",
+      "mnemonic": "call",
+      "text": "call qword ptr [rsp + 0x20]",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": [
+          {
+            "address": "0x7000000020",
+            "data": "0020004001000000",
+            "size": 8
+          }
+        ]
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x2000"
+      },
+      "scratch-taint": {
+        "tainted": true,
+        "unknown": false
+      },
+      "stackSlot": {
+        "role": "abi-frame",
+        "displacement": "0x20"
+      }
+    },
+    {
+      "observationId": "unknown-scratch",
+      "run": "fixture",
+      "sourceRva": "0x1070",
+      "targetRva": "0x2000",
+      "targetVa": "0x140002000",
+      "mnemonic": "call",
+      "text": "call qword ptr [rsp + 0x20]",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": [
+          {
+            "address": "0x7000000020",
+            "data": "0020004001000000",
+            "size": 8
+          }
+        ]
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x2000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": true
+      },
+      "stackSlot": {
+        "role": "abi-frame",
+        "displacement": "0x20"
+      }
+    },
+    {
+      "observationId": "bad-replay",
+      "run": "fixture",
+      "sourceRva": "0x1078",
+      "targetRva": "0x2000",
+      "targetVa": "0x140002000",
+      "mnemonic": "call",
+      "text": "call qword ptr [rsp + 0x20]",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": [
+          {
+            "address": "0x7000000020",
+            "data": "0020004001000000",
+            "size": 8
+          }
+        ]
+      },
+      "replay": {
+        "status": "mismatch",
+        "actualTargetRva": "0x2000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stackSlot": {
+        "role": "abi-frame",
+        "displacement": "0x20"
+      }
+    },
+    {
+      "observationId": "mismatched-context-rsp",
+      "run": "fixture",
+      "sourceRva": "0x1080",
+      "targetRva": "0x2000",
+      "targetVa": "0x140002000",
+      "mnemonic": "call",
+      "text": "call qword ptr [rsp + 0x20]",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000010"
+        },
+        "memory": [
+          {
+            "address": "0x7000000020",
+            "data": "0020004001000000",
+            "size": 8
+          }
+        ]
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x2000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stackSlot": {
+        "role": "abi-frame",
+        "displacement": "0x20"
+      }
     }
   ],
   "controlFlowSites": []

@@ -9,6 +9,7 @@
 
 #include "bin2llvmir/utils/llvmir_tests.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder.h"
+#include "retdec/bin2llvmir/optimizations/stack/stack.h"
 #include "retdec/bin2llvmir/providers/griffin_overlay.h"
 #include "retdec/bin2llvmir/providers/griffin_sidecar.h"
 
@@ -117,6 +118,16 @@ TEST_F(GriffinSidecarStackTests, rejectsUnprovedMemoryAndConflictingRoles)
 	auto conflict = sidecar.getStackSlot(TraceBase + 0x1050);
 	ASSERT_TRUE(conflict);
 	EXPECT_EQ(GriffinSidecar::StackSlotRole::Unknown, conflict->role);
+}
+
+TEST_F(GriffinSidecarStackTests, rejectsIncompleteTaintedAndMismatchedContexts)
+{
+	auto sidecar = GriffinSidecar::fromFile(RETDEC_GRIFFIN_STACK_TEST_SIDECAR);
+
+	for (uint64_t rva : {0x1060, 0x1068, 0x1070, 0x1078, 0x1080})
+	{
+		EXPECT_FALSE(sidecar.getStackSlot(TraceBase + rva)) << std::hex << rva;
+	}
 }
 
 TEST_F(GriffinSidecarStackTests, realObservationsRemainUnknownWithoutRoleProof)
@@ -601,6 +612,90 @@ class GriffinCffDecoderTests: public LlvmIrTests
 			EXPECT_TRUE(first->contains(TraceBase + 0x8002));
 		}
 };
+
+class GriffinStackAnalysisTests: public LlvmIrTests
+{
+	protected:
+		std::unique_ptr<Config> config;
+
+		void runAt(uint64_t rva, int displacement = 0x20, bool withMapping = true)
+		{
+			clearAllStaticData();
+			std::string ir = R"(
+				@rsp = global i64 0
+				@llvm2asm = global i64 0
+				define void @fnc() {
+				entry:
+					store volatile i64 0, i64* @llvm2asm
+					%sp = load i64, i64* @rsp
+					%address = add i64 %sp, DISPLACEMENT
+					%pointer = inttoptr i64 %address to i64*
+					store i64 7, i64* %pointer
+					ret void
+				}
+			)";
+			auto displacementPos = ir.find("DISPLACEMENT");
+			ir.replace(displacementPos, std::string("DISPLACEMENT").size(),
+					std::to_string(displacement));
+			parseInput(ir);
+			auto* marker = getGlobalByName("llvm2asm");
+			if (withMapping)
+			{
+				AsmInstruction::setLlvmToAsmGlobalVariable(module.get(), marker);
+				auto* markerStore = cast<StoreInst>(&getFunctionByName("fnc")->
+						getEntryBlock().front());
+				markerStore->setOperand(0, ConstantInt::get(
+						Type::getInt64Ty(context), TraceBase + rva));
+			}
+			config = std::make_unique<Config>(Config::empty(module.get()));
+			config->getConfig().architecture.setName("x86-64");
+			config->getConfig().architecture.setBitSize(64);
+			config->getConfig().parameters.setGriffinSidecar(
+					RETDEC_GRIFFIN_STACK_TEST_SIDECAR);
+			auto* abi = AbiProvider::addAbi(module.get(), config.get());
+			ASSERT_NE(nullptr, abi);
+			auto* rsp = getGlobalByName("rsp");
+			ASSERT_NE(nullptr, rsp);
+			abi->addRegister(X86_REG_RSP, rsp);
+			EXPECT_TRUE(abi->isStackPointerRegister(rsp));
+			SymbolicTree::setAbi(abi);
+			SymbolicTree::setConfig(config.get());
+			StackAnalysis pass;
+			pass.runOnModuleCustom(*module, config.get(), abi);
+		}
+
+		bool reconstructedFrame()
+		{
+			auto* fnc = getFunctionByName("fnc");
+			return std::any_of(fnc->begin(), fnc->end(), [](BasicBlock& bb) {
+				return std::any_of(bb.begin(), bb.end(), [](Instruction& inst) {
+					return isa<AllocaInst>(inst);
+				});
+			});
+		}
+};
+
+TEST_F(GriffinStackAnalysisTests, onlyExplicitAbiRoleRebuildsFrame)
+{
+	for (uint64_t rva : {0x1010, 0x1020, 0x1030, 0x1040, 0x1048, 0x1050,
+			0x1060, 0x1068, 0x1070, 0x1078, 0x1080, 0x1090})
+	{
+		runAt(rva);
+		EXPECT_FALSE(reconstructedFrame()) << std::hex << rva;
+	}
+	runAt(0x1000);
+	EXPECT_TRUE(reconstructedFrame());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinStackAnalysisTests, abiRoleRequiresMatchingDisplacementAndAsmContext)
+{
+	runAt(0x1000, 0x28);
+	EXPECT_FALSE(reconstructedFrame());
+
+	runAt(0x1000, 0x20, false);
+	EXPECT_FALSE(reconstructedFrame());
+}
 
 TEST_F(GriffinCffDecoderTests, provedStateSetBecomesSwitch)
 {

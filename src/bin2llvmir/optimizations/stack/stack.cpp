@@ -157,6 +157,7 @@ void StackAnalysis::handleInstruction(
 	// location is an ABI local. VM registers and spills must stay opaque; an
 	// unannotated slot remains unknown instead of becoming stack_var_<disp>.
 	bool memoryPointer = false;
+	std::optional<GriffinSidecar::StackSlot> stackSlot;
 	if (auto* s = dyn_cast<StoreInst>(inst))
 	{
 		memoryPointer = s->getPointerOperand() == val;
@@ -168,12 +169,13 @@ void StackAnalysis::handleInstruction(
 	if (_griffin && memoryPointer)
 	{
 		AsmInstruction ai(inst);
-		auto slot = ai.isValid()
+		stackSlot = ai.isValid()
 				? _griffin->getStackSlot(ai.getAddress())
-				: std::optional<GriffinSidecar::StackSlot>();
-		if (slot && slot->role != GriffinSidecar::StackSlotRole::AbiFrame)
+				: std::nullopt;
+		if (!stackSlot
+				|| stackSlot->role != GriffinSidecar::StackSlotRole::AbiFrame)
 		{
-			LOG << "===> Griffin non-ABI/unknown stack slot; keep opaque"
+			LOG << "===> Griffin stack slot without explicit ABI proof; keep opaque"
 					<< std::endl;
 			return;
 		}
@@ -219,6 +221,12 @@ void StackAnalysis::handleInstruction(
 	auto* ci = dyn_cast_or_null<ConstantInt>(root.value);
 	if (ci == nullptr)
 	{
+		return;
+	}
+	if (stackSlot && ci->getSExtValue() != stackSlot->displacement)
+	{
+		LOG << "===> Griffin ABI proof does not match this displacement"
+				<< std::endl;
 		return;
 	}
 

@@ -35,8 +35,13 @@ TEST_F(NtWdkPrototypeTests, refinesKnownDeclarationAndPreservesDirectCallSsa)
 	EXPECT_TRUE(api->getReturnType()->isPointerTy());
 	EXPECT_EQ("_MDL", api->getReturnType()->getPointerElementType()->getStructName());
 	ASSERT_EQ(5, api->arg_size());
+	EXPECT_EQ("_DEVICE_OBJECT", api->getFunctionType()->getParamType(0)
+			->getPointerElementType()->getStructName());
 	EXPECT_TRUE(api->getFunctionType()->getParamType(1)->isIntegerTy(32));
 	EXPECT_TRUE(api->getFunctionType()->getParamType(2)->isIntegerTy(8));
+	EXPECT_TRUE(api->getFunctionType()->getParamType(3)->isIntegerTy(8));
+	EXPECT_EQ("_IRP", api->getFunctionType()->getParamType(4)
+			->getPointerElementType()->getStructName());
 	auto* call = cast<CallInst>(&module->getFunction("fnc")->getEntryBlock().front());
 	EXPECT_EQ(api, call->getCalledOperand()->stripPointerCasts());
 	EXPECT_TRUE(call->getType()->isPointerTy());
@@ -99,6 +104,31 @@ TEST_F(NtWdkPrototypeTests, canonicalApplicationIsIdempotent)
 	)");
 	EXPECT_EQ(0, NtWdkPrototypes::apply(*module));
 	EXPECT_EQ(0, NtWdkPrototypes::apply(*module));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(NtWdkPrototypeTests, usesOfficialGuardedMutexAndWaitModeTypes)
+{
+	parseInput(R"(
+		declare void @KeAcquireGuardedMutex(i8*)
+		declare void @KeReleaseGuardedMutex(i8*)
+		declare i32 @KeWaitForSingleObject(i8*, i32, i32, i32, i8*)
+	)");
+	EXPECT_EQ(3, NtWdkPrototypes::apply(*module));
+	for (const char* name : {"KeAcquireGuardedMutex", "KeReleaseGuardedMutex"})
+	{
+		auto* api = module->getFunction(name);
+		ASSERT_NE(nullptr, api);
+		ASSERT_EQ(1, api->arg_size());
+		EXPECT_EQ("_KGUARDED_MUTEX", api->getFunctionType()->getParamType(0)
+				->getPointerElementType()->getStructName());
+	}
+	auto* wait = module->getFunction("KeWaitForSingleObject");
+	ASSERT_NE(nullptr, wait);
+	ASSERT_EQ(5, wait->arg_size());
+	EXPECT_TRUE(wait->getFunctionType()->getParamType(1)->isIntegerTy(32));
+	EXPECT_TRUE(wait->getFunctionType()->getParamType(2)->isIntegerTy(8));
+	EXPECT_TRUE(wait->getFunctionType()->getParamType(3)->isIntegerTy(8));
 	EXPECT_FALSE(verifyModule(*module, &errs()));
 }
 

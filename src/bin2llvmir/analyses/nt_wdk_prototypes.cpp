@@ -29,12 +29,12 @@ struct Prototype
 };
 
 const std::map<std::string, Prototype> Prototypes = {
-	{"KeAcquireGuardedMutex", {"void", {"%_FAST_MUTEX*"}, "wdm.h/nf-wdm-keacquireguardedmutex"}},
-	{"KeReleaseGuardedMutex", {"void", {"%_FAST_MUTEX*"}, "wdm.h/nf-wdm-kereleaseguardedmutex"}},
+	{"KeAcquireGuardedMutex", {"void", {"%_KGUARDED_MUTEX*"}, "wdm.h/nf-wdm-keacquireguardedmutex"}},
+	{"KeReleaseGuardedMutex", {"void", {"%_KGUARDED_MUTEX*"}, "wdm.h/nf-wdm-kereleaseguardedmutex"}},
 	{"ExAcquirePushLockExclusiveEx", {"void", {"%_EX_PUSH_LOCK*", "i32"}, "wdm.h/nf-wdm-exacquirepushlockexclusiveex"}},
 	{"ExReleasePushLockExclusiveEx", {"void", {"%_EX_PUSH_LOCK*", "i32"}, "wdm.h/nf-wdm-exreleasepushlockexclusiveex"}},
 	{"IoGetCurrentProcess", {"%_EPROCESS*", {}, "wdm.h/nf-wdm-iogetcurrentprocess"}},
-	{"IoAllocateMdl", {"%_MDL*", {"i8*", "i32", "i8", "i8", "%_IRP*"}, "wdm.h/nf-wdm-ioallocatemdl"}},
+	{"IoAllocateMdl", {"%_MDL*", {"%_DEVICE_OBJECT*", "i32", "i8", "i8", "%_IRP*"}, "wdm.h/nf-wdm-ioallocatemdl"}},
 	{"IoFreeMdl", {"void", {"%_MDL*"}, "wdm.h/nf-wdm-iofreemdl"}},
 	{"MmGetSystemRoutineAddress", {"i8*", {"%_UNICODE_STRING*"}, "wdm.h/nf-wdm-mmgetsystemroutineaddress"}},
 	{"ObReferenceObjectByPointer", {"i32", {"i8*", "i32", "%_OBJECT_TYPE*", "i8"}, "wdm.h/nf-wdm-obreferenceobjectbypointer"}},
@@ -43,7 +43,7 @@ const std::map<std::string, Prototype> Prototypes = {
 	{"KeGetCurrentIrql", {"i8", {}, "wdm.h/nf-wdm-kegetcurrentirql"}},
 	{"KfRaiseIrql", {"i8", {"i8"}, "wdm.h/nf-wdm-kfraiseirql"}},
 	{"KeLowerIrql", {"void", {"i8"}, "wdm.h/nf-wdm-kelowerirql"}},
-	{"KeWaitForSingleObject", {"i32", {"i8*", "i32", "i32", "i8", "i8*"}, "wdm.h/nf-wdm-kewaitforsingleobject"}}
+	{"KeWaitForSingleObject", {"i32", {"i8*", "i32", "i8", "i8", "i8*"}, "wdm.h/nf-wdm-kewaitforsingleobject"}}
 };
 
 Type* typeFromName(Module& module, const std::string& name)

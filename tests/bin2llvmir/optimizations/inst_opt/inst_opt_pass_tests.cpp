@@ -177,6 +177,56 @@ TEST_F(InstructionOptimizerTests, eflagsLivenessRemovesEntryStoreWhenAllBranches
 	EXPECT_EQ(2, flagStores());
 }
 
+TEST_F(InstructionOptimizerTests, eflagsLivenessTreatsCallsAsUnknownReaders)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		declare void @g()
+		define void @fnc() {
+			store i1 true, i1* @zf
+			call void @g()
+			unreachable
+		}
+	)");
+	pass.runOnModuleCustom(*module);
+	EXPECT_EQ(1, flagStores());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessPropagatesAroundLoops)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		define void @fnc(i1 %cond) {
+		entry:
+			store i1 true, i1* @zf
+			br label %loop
+		loop:
+			%v = load i1, i1* @zf
+			br i1 %cond, label %loop, label %exit
+		exit:
+			unreachable
+		}
+	)");
+	pass.runOnModuleCustom(*module);
+	EXPECT_EQ(1, flagStores());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(InstructionOptimizerTests, eflagsLivenessRemovesStoreBeforeUnreachable)
+{
+	parseInput(R"(
+		@zf = global i1 0
+		define void @fnc() {
+			store i1 true, i1* @zf
+			unreachable
+		}
+	)");
+	EXPECT_TRUE(pass.runOnModuleCustom(*module));
+	EXPECT_EQ(0, flagStores());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
 } // namespace tests
 } // namespace bin2llvmir
 } // namespace retdec

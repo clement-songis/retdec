@@ -802,6 +802,36 @@ TEST_F(OptimizeTests, mbaAddOrAndCastsRejectsDifferentPairs)
 	EXPECT_FALSE(inst_opt::optimize(getInstructionByName("x")));
 }
 
+TEST_F(OptimizeTests, mbaAddOrAndCastsRejectsMixedCasts)
+{
+	parseInput(R"(
+		define i64 @fnc(i32 %a, i32 %b) {
+			%o = or i32 %a, %b
+			%n = and i32 %a, %b
+			%zo = zext i32 %o to i64
+			%sn = sext i32 %n to i64
+			%x = add i64 %zo, %sn
+			ret i64 %x
+		}
+	)");
+	EXPECT_FALSE(inst_opt::optimize(getInstructionByName("x")));
+}
+
+TEST_F(OptimizeTests, mbaAddOrAndCastsRejectsOtherWidths)
+{
+	parseInput(R"(
+		define i32 @fnc(i16 %a, i16 %b) {
+			%o = or i16 %a, %b
+			%n = and i16 %a, %b
+			%zo = zext i16 %o to i32
+			%zn = zext i16 %n to i32
+			%x = add i32 %zo, %zn
+			ret i32 %x
+		}
+	)");
+	EXPECT_FALSE(inst_opt::optimize(getInstructionByName("x")));
+}
+
 } // namespace tests
 } // namespace bin2llvmir
 } // namespace retdec

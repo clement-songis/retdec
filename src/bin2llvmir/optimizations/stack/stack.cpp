@@ -16,6 +16,7 @@
 #include "retdec/bin2llvmir/analyses/reaching_definitions.h"
 #include "retdec/bin2llvmir/optimizations/stack/stack.h"
 #include "retdec/bin2llvmir/providers/asm_instruction.h"
+#include "retdec/bin2llvmir/providers/fileimage.h"
 #include "retdec/bin2llvmir/utils/ir_modifier.h"
 #define debug_enabled false
 #include "retdec/bin2llvmir/utils/llvm.h"
@@ -67,6 +68,21 @@ bool StackAnalysis::run()
 	if (_config == nullptr)
 	{
 		return false;
+	}
+
+	_griffin.reset();
+	auto& griffinPath = _config->getConfig().parameters.getGriffinSidecar();
+	if (!griffinPath.empty())
+	{
+		auto sidecar = GriffinSidecar::fromFile(griffinPath);
+		auto* image = FileImageProvider::getFileImage(_module);
+		if (image && !sidecar.checkImageSha256(
+				image->getFileFormat()->getSha256()))
+		{
+			throw std::runtime_error(
+					"Griffin sidecar image SHA256 does not match the input binary");
+		}
+		_griffin = std::make_unique<GriffinSidecar>(std::move(sidecar));
 	}
 
 	ReachingDefinitionsAnalysis RDA;
@@ -136,6 +152,32 @@ void StackAnalysis::handleInstruction(
 		std::map<llvm::Value*, llvm::Value*>& val2val)
 {
 	LOG << llvmObjToString(inst) << std::endl;
+
+	// A dynamically observed RSP operand proves an address, not that the
+	// location is an ABI local. VM registers and spills must stay opaque; an
+	// unannotated slot remains unknown instead of becoming stack_var_<disp>.
+	bool memoryPointer = false;
+	if (auto* s = dyn_cast<StoreInst>(inst))
+	{
+		memoryPointer = s->getPointerOperand() == val;
+	}
+	else if (auto* l = dyn_cast<LoadInst>(inst))
+	{
+		memoryPointer = l->getPointerOperand() == val;
+	}
+	if (_griffin && memoryPointer)
+	{
+		AsmInstruction ai(inst);
+		auto slot = ai.isValid()
+				? _griffin->getStackSlot(ai.getAddress())
+				: std::optional<GriffinSidecar::StackSlot>();
+		if (slot && slot->role != GriffinSidecar::StackSlotRole::AbiFrame)
+		{
+			LOG << "===> Griffin non-ABI/unknown stack slot; keep opaque"
+					<< std::endl;
+			return;
+		}
+	}
 
 	auto root = SymbolicTree::PrecomputedRdaWithValueMap(RDA, val, &val2val);
 	LOG << root << std::endl;

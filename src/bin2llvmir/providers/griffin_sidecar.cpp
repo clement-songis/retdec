@@ -8,6 +8,8 @@
 #include <cctype>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <regex>
 #include <stdexcept>
 
 #include <rapidjson/document.h>
@@ -140,6 +142,191 @@ bool v2ObservationMatches(
 	}
 }
 
+std::optional<uint64_t> littleEndianUint64(const std::string& text)
+{
+	if (text.size() != 16
+			|| !std::all_of(text.begin(), text.end(), [](unsigned char c) {
+				return std::isxdigit(c) != 0;
+			}))
+	{
+		return std::nullopt;
+	}
+	uint64_t value = 0;
+	for (unsigned byte = 0; byte < 8; ++byte)
+	{
+		auto octet = std::stoul(text.substr(byte * 2, 2), nullptr, 16);
+		value |= static_cast<uint64_t>(octet) << (byte * 8);
+	}
+	return value;
+}
+
+int64_t jsonDisplacement(const rapidjson::Value& value)
+{
+	if (value.IsInt64())
+	{
+		return value.GetInt64();
+	}
+	if (value.IsString())
+	{
+		std::size_t used = 0;
+		std::string text = value.GetString();
+		auto result = std::stoll(text, &used, 0);
+		if (used == text.size())
+		{
+			return result;
+		}
+	}
+	throw std::runtime_error("invalid Griffin stack displacement");
+}
+
+GriffinSidecar::StackSlotRole stackSlotRole(const rapidjson::Value& observation)
+{
+	auto it = observation.FindMember("stackSlot");
+	if (it == observation.MemberEnd() || !it->value.IsObject())
+	{
+		return GriffinSidecar::StackSlotRole::Unknown;
+	}
+	auto role = it->value.FindMember("role");
+	if (role == it->value.MemberEnd() || !role->value.IsString())
+	{
+		return GriffinSidecar::StackSlotRole::Unknown;
+	}
+	std::string value = role->value.GetString();
+	if (value == "abi-frame")
+	{
+		return GriffinSidecar::StackSlotRole::AbiFrame;
+	}
+	if (value == "vm-register")
+	{
+		return GriffinSidecar::StackSlotRole::VmRegister;
+	}
+	if (value == "vm-spill")
+	{
+		return GriffinSidecar::StackSlotRole::VmSpill;
+	}
+	return GriffinSidecar::StackSlotRole::Unknown;
+}
+
+std::optional<GriffinSidecar::StackSlot> observedStackSlot(
+		const rapidjson::Value& observation,
+		const std::string& imageSha256)
+{
+	try
+	{
+		if (!stringMemberIs(observation, "classification", "dynamic-verified"))
+		{
+			return std::nullopt;
+		}
+		auto source = jsonAddress(requiredMember(observation, "sourceRva"), "sourceRva");
+		auto target = jsonAddress(requiredMember(observation, "targetRva"), "targetRva");
+		if (!v2ObservationMatches(
+				source, target, "dynamic-verified", imageSha256, observation))
+		{
+			return std::nullopt;
+		}
+
+		auto& textValue = requiredMember(observation, "text");
+		if (!textValue.IsString())
+		{
+			return std::nullopt;
+		}
+		// Deliberately exclude scaled/indexed forms: their dynamic address
+		// cannot be attributed to a constant RSP slot from this observation.
+		static const std::regex rspOperand(
+				"^(call|jmp) qword ptr \\[rsp(?: ([+-]) (0x[0-9a-fA-F]+|[0-9]+))?\\]$");
+		std::smatch match;
+		std::string text = textValue.GetString();
+		if (!std::regex_match(text, match, rspOperand))
+		{
+			return std::nullopt;
+		}
+		uint64_t displacement = 0;
+		if (match[3].matched)
+		{
+			std::size_t used = 0;
+			std::string textDisplacement = match[3].str();
+			displacement = std::stoull(textDisplacement, &used, 0);
+			if (used != textDisplacement.size())
+			{
+				return std::nullopt;
+			}
+		}
+		if (displacement > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+		{
+			return std::nullopt;
+		}
+		auto rsp = jsonAddress(requiredMember(observation, "rsp"), "rsp");
+		auto& context = requiredMember(observation, "context");
+		auto& registers = requiredMember(context, "registers");
+		if (jsonAddress(requiredMember(registers, "rsp"), "context.registers.rsp") != rsp)
+		{
+			return std::nullopt;
+		}
+		bool subtract = match[2].matched && match[2].str() == "-";
+		if ((subtract && displacement > rsp)
+				|| (!subtract && displacement > UINT64_MAX - rsp))
+		{
+			return std::nullopt;
+		}
+		uint64_t address = subtract ? rsp - displacement : rsp + displacement;
+		auto targetVa = jsonAddress(requiredMember(observation, "targetVa"), "targetVa");
+
+		bool matchingMemory = false;
+		auto& memory = requiredMember(context, "memory");
+		if (!memory.IsArray())
+		{
+			return std::nullopt;
+		}
+		for (const auto& item : memory.GetArray())
+		{
+			if (!item.IsObject()
+					|| jsonAddress(requiredMember(item, "address"), "memory.address") != address
+					|| jsonAddress(requiredMember(item, "size"), "memory.size") != 8)
+			{
+				continue;
+			}
+			auto& data = requiredMember(item, "data");
+			if (!data.IsString())
+			{
+				continue;
+			}
+			auto value = littleEndianUint64(data.GetString());
+			matchingMemory = value && *value == targetVa;
+			if (matchingMemory)
+			{
+				break;
+			}
+		}
+		if (!matchingMemory)
+		{
+			return std::nullopt;
+		}
+
+		GriffinSidecar::StackSlot slot;
+		slot.displacement = subtract
+				? -static_cast<int64_t>(displacement)
+				: static_cast<int64_t>(displacement);
+		slot.address = address;
+		slot.size = 8;
+		slot.role = stackSlotRole(observation);
+		auto annotation = observation.FindMember("stackSlot");
+		if (annotation != observation.MemberEnd() && annotation->value.IsObject())
+		{
+			auto annotatedDisplacement = annotation->value.FindMember("displacement");
+			if (annotatedDisplacement != annotation->value.MemberEnd()
+					&& jsonDisplacement(annotatedDisplacement->value) != slot.displacement)
+			{
+				return std::nullopt;
+			}
+		}
+		return slot;
+	}
+	catch (const std::exception&)
+	{
+		return std::nullopt;
+	}
+}
+
 } // namespace
 
 GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
@@ -242,6 +429,21 @@ GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
 			if (id.IsString())
 			{
 				observations[id.GetString()] = &observation;
+			}
+			auto slot = observedStackSlot(observation, result._imageSha256);
+			if (slot)
+			{
+				auto source = jsonAddress(
+						requiredMember(observation, "sourceRva"), "sourceRva");
+				auto inserted = result._stackSlots.emplace(source, *slot);
+				if (!inserted.second
+						&& (inserted.first->second.displacement != slot->displacement
+								|| inserted.first->second.role != slot->role))
+				{
+					// Disagreement about a role is itself unknown. Never pick
+					// the most convenient interpretation.
+					inserted.first->second.role = GriffinSidecar::StackSlotRole::Unknown;
+				}
 			}
 		}
 	}
@@ -522,6 +724,43 @@ std::size_t GriffinSidecar::getRetTargetCount() const
 std::size_t GriffinSidecar::getUnresolvedRetCount() const
 {
 	return _unresolvedRets.size();
+}
+
+std::optional<GriffinSidecar::StackSlot> GriffinSidecar::getStackSlot(
+		Address site) const
+{
+	if (site.isUndefined())
+	{
+		return std::nullopt;
+	}
+	for (uint64_t base : _bases)
+	{
+		uint64_t value = site.getValue();
+		if (value < base || value - base >= _imageSize)
+		{
+			continue;
+		}
+		auto it = _stackSlots.find(value - base);
+		if (it == _stackSlots.end())
+		{
+			return std::nullopt;
+		}
+		auto slot = it->second;
+		return slot;
+	}
+	return std::nullopt;
+}
+
+std::size_t GriffinSidecar::getStackSlotCount() const
+{
+	return _stackSlots.size();
+}
+
+std::size_t GriffinSidecar::getAbiFrameStackSlotCount() const
+{
+	return std::count_if(_stackSlots.begin(), _stackSlots.end(), [](const auto& item) {
+		return item.second.role == StackSlotRole::AbiFrame;
+	});
 }
 
 } // namespace bin2llvmir

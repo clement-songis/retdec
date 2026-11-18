@@ -30,6 +30,22 @@ namespace bin2llvmir {
 class GriffinSidecar
 {
 	public:
+		enum class StackSlotRole
+		{
+			Unknown,
+			AbiFrame,
+			VmRegister,
+			VmSpill
+		};
+
+		struct StackSlot
+		{
+			int64_t displacement = 0;
+			uint64_t address = 0;
+			uint64_t size = 0;
+			StackSlotRole role = StackSlotRole::Unknown;
+		};
+
 		enum class ControlStatus
 		{
 			Unknown,
@@ -47,6 +63,7 @@ class GriffinSidecar
 				const std::string& kind) const;
 		std::optional<common::Address> getRetTrampolineTarget(
 				common::Address site) const;
+		std::optional<StackSlot> getStackSlot(common::Address site) const;
 
 		bool checkImageSha256(const std::string& actualSha256) const;
 		bool isEvidenceV2() const;
@@ -54,6 +71,8 @@ class GriffinSidecar
 		std::size_t getDynamicVerifiedTargetCount() const;
 		std::size_t getRetTargetCount() const;
 		std::size_t getUnresolvedRetCount() const;
+		std::size_t getStackSlotCount() const;
+		std::size_t getAbiFrameStackSlotCount() const;
 
 	private:
 		struct ControlTarget
@@ -76,6 +95,7 @@ class GriffinSidecar
 		std::size_t _dynamicVerifiedTargetCount = 0;
 		std::map<uint64_t, uint64_t> _retTargets;
 		std::set<uint64_t> _unresolvedRets;
+		std::map<uint64_t, StackSlot> _stackSlots;
 };
 
 } // namespace bin2llvmir

@@ -38,6 +38,7 @@ target_compile_definitions(tests-bin2llvmir
 	PRIVATE
 		RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json"
 		RETDEC_GRIFFIN_V2_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_v2_test.json"
+		RETDEC_GRIFFIN_STACK_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_stack_test.json"
 		RETDEC_GRIFFIN_OVERLAY_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_test.json"
 		RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json"
 )
@@ -62,6 +63,7 @@ target_include_directories(tests-griffin PRIVATE ${RETDEC_TESTS_DIR})
 target_compile_definitions(tests-griffin PRIVATE
 	RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json"
 	RETDEC_GRIFFIN_V2_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_v2_test.json"
+	RETDEC_GRIFFIN_STACK_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_stack_test.json"
 	RETDEC_GRIFFIN_OVERLAY_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_test.json"
 	RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json")
 target_link_libraries(tests-griffin

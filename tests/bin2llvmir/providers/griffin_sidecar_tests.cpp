@@ -80,6 +80,62 @@ class GriffinSidecarV2Tests: public LlvmIrTests
 {
 };
 
+class GriffinSidecarStackTests: public LlvmIrTests
+{
+};
+
+TEST_F(GriffinSidecarStackTests, distinguishesAbiFrameFromVmStorageAndUnknown)
+{
+	auto sidecar = GriffinSidecar::fromFile(RETDEC_GRIFFIN_STACK_TEST_SIDECAR);
+
+	EXPECT_EQ(5, sidecar.getStackSlotCount());
+	EXPECT_EQ(1, sidecar.getAbiFrameStackSlotCount());
+	auto abi = sidecar.getStackSlot(TraceBase + 0x1000);
+	ASSERT_TRUE(abi);
+	EXPECT_EQ(0x20, abi->displacement);
+	EXPECT_EQ(8, abi->size);
+	EXPECT_EQ(0x7000000020, abi->address);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::AbiFrame, abi->role);
+	auto vmRegister = sidecar.getStackSlot(TraceBase + 0x1010);
+	ASSERT_TRUE(vmRegister);
+	EXPECT_EQ(0x28, vmRegister->displacement);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::VmRegister, vmRegister->role);
+	auto vmSpill = sidecar.getStackSlot(TraceBase + 0x1020);
+	ASSERT_TRUE(vmSpill);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::VmSpill, vmSpill->role);
+	auto unknown = sidecar.getStackSlot(TraceBase + 0x1030);
+	ASSERT_TRUE(unknown);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::Unknown, unknown->role);
+}
+
+TEST_F(GriffinSidecarStackTests, rejectsUnprovedMemoryAndConflictingRoles)
+{
+	auto sidecar = GriffinSidecar::fromFile(RETDEC_GRIFFIN_STACK_TEST_SIDECAR);
+
+	EXPECT_FALSE(sidecar.getStackSlot(TraceBase + 0x1040));
+	EXPECT_FALSE(sidecar.getStackSlot(TraceBase + 0x1048));
+	auto conflict = sidecar.getStackSlot(TraceBase + 0x1050);
+	ASSERT_TRUE(conflict);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::Unknown, conflict->role);
+}
+
+TEST_F(GriffinSidecarStackTests, realObservationsRemainUnknownWithoutRoleProof)
+{
+	const char* path = std::getenv("RETDEC_GRIFFIN_REAL_STACK_SIDECAR");
+	if (path == nullptr)
+	{
+		GTEST_SKIP() << "RETDEC_GRIFFIN_REAL_STACK_SIDECAR not set";
+	}
+	auto sidecar = GriffinSidecar::fromFile(path);
+
+	EXPECT_GT(sidecar.getStackSlotCount(), 0);
+	EXPECT_EQ(0, sidecar.getAbiFrameStackSlotCount());
+	auto slot = sidecar.getStackSlot(TraceBase + 0xc1c13b);
+	ASSERT_TRUE(slot);
+	EXPECT_EQ(0x70, slot->displacement);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::Unknown, slot->role);
+}
+
 TEST_F(GriffinSidecarV2Tests, witnessPromotesStaticAndDynamicVerifiedOnly)
 {
 	const char* path = std::getenv("RETDEC_GRIFFIN_V2_WITNESS");

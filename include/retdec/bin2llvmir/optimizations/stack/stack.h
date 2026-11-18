@@ -8,6 +8,7 @@
 #define RETDEC_BIN2LLVMIR_OPTIMIZATIONS_STACK_STACK_H
 
 #include <optional>
+#include <memory>
 #include <unordered_set>
 
 #include <llvm/IR/Module.h>
@@ -17,6 +18,7 @@
 #include "retdec/bin2llvmir/providers/abi/abi.h"
 #include "retdec/bin2llvmir/providers/config.h"
 #include "retdec/bin2llvmir/providers/debugformat.h"
+#include "retdec/bin2llvmir/providers/griffin_sidecar.h"
 
 namespace retdec {
 namespace bin2llvmir {
@@ -54,6 +56,7 @@ class StackAnalysis : public llvm::ModulePass
 		Config* _config = nullptr;
 		Abi* _abi = nullptr;
 		DebugFormat* _dbgf = nullptr;
+		std::unique_ptr<GriffinSidecar> _griffin;
 
 		std::unordered_set<llvm::Value*> _toRemove;
 };

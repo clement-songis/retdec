@@ -161,6 +161,27 @@ llvm::BasicBlock* Decoder::createBasicBlock(
 
 void Decoder::addBasicBlock(common::Address a, llvm::BasicBlock* b)
 {
+	// An address has one assembly owner, even when Griffin preserves another
+	// overlapped IR fragment. Keep both directions of the index in sync when a
+	// placeholder is cloned or replaced; never leave two blocks claiming it.
+	auto oldBlock = _addr2bb.find(a);
+	if (oldBlock != _addr2bb.end() && oldBlock->second != b)
+	{
+		auto oldAddress = _bb2addr.find(oldBlock->second);
+		if (oldAddress != _bb2addr.end() && oldAddress->second == a)
+		{
+			_bb2addr.erase(oldAddress);
+		}
+	}
+	auto oldAddress = _bb2addr.find(b);
+	if (oldAddress != _bb2addr.end() && oldAddress->second != a)
+	{
+		auto oldOwner = _addr2bb.find(oldAddress->second);
+		if (oldOwner != _addr2bb.end() && oldOwner->second == b)
+		{
+			_addr2bb.erase(oldOwner);
+		}
+	}
 	_addr2bb[a] = b;
 	_bb2addr[b] = a;
 }

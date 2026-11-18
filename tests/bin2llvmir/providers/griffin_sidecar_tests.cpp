@@ -545,12 +545,57 @@ class GriffinDecoderTests: public LlvmIrTests
 			ASSERT_TRUE(decoder.transformToGriffinJump(
 					TraceBase + 0x58df7f, pseudo, TraceBase + 0x58df81));
 			auto* branch = cast<BranchInst>(entry.getTerminator());
-			EXPECT_EQ(fnc, branch->getSuccessor(0)->getParent());
+			auto* cloned = branch->getSuccessor(0);
+			EXPECT_EQ(fnc, cloned->getParent());
 			EXPECT_EQ(2, fnc->size());
 			EXPECT_NE(nullptr, getFunctionByName("target"));
+			EXPECT_EQ(cloned, decoder._addr2bb.at(TraceBase + 0x58df80));
+			EXPECT_EQ(TraceBase + 0x58df80, decoder._bb2addr.at(cloned));
+			EXPECT_EQ(0, decoder._bb2addr.count(targetBb));
+			EXPECT_EQ(1, std::count_if(
+					decoder._addr2bb.begin(), decoder._addr2bb.end(),
+					[](const auto& item) {
+						return item.first == TraceBase + 0x58df80;
+					}));
 			EXPECT_FALSE(verifyModule(*module, &errs()));
 			EXPECT_EQ(1, std::count_if(entry.begin(), entry.end(),
 					[](const Instruction& i) { return isa<CallInst>(i); }));
+		}
+
+		void unsafeJumpTargetDoesNotBecomeCall()
+		{
+			parseInput(R"(
+				declare void @__pseudo_br(i64)
+				define i64 @fnc() {
+				entry:
+					call void @__pseudo_br(i64 0)
+					ret i64 0
+				}
+				define i64 @target() {
+				entry:
+					unreachable
+				}
+			)");
+			prepareV2Decoder();
+			auto* fnc = getFunctionByName("fnc");
+			auto* targetFnc = getFunctionByName("target");
+			auto* targetBb = &targetFnc->getEntryBlock();
+			decoder._addr2fnc[TraceBase + 0x27cee7] = targetFnc;
+			decoder._fnc2addr[targetFnc] = TraceBase + 0x27cee7;
+			decoder._addr2bb[TraceBase + 0x27cee7] = targetBb;
+			decoder._bb2addr[targetBb] = TraceBase + 0x27cee7;
+			auto& entry = fnc->getEntryBlock();
+			auto* pseudo = cast<CallInst>(&entry.front());
+			auto instructionsBefore = entry.size();
+
+			EXPECT_FALSE(decoder.transformToGriffinJump(
+					TraceBase + 0x58df90, pseudo, TraceBase + 0x58df92));
+			EXPECT_TRUE(isa<ReturnInst>(entry.getTerminator()));
+			EXPECT_EQ(instructionsBefore, entry.size());
+			EXPECT_EQ(1, std::count_if(entry.begin(), entry.end(),
+					[](const Instruction& i) { return isa<CallInst>(i); }));
+			EXPECT_EQ(targetFnc, targetBb->getParent());
+			EXPECT_FALSE(verifyModule(*module, &errs()));
 		}
 
 		void overlappedTargetRangeSurvivesAndRejectedRetDoesNot()
@@ -618,6 +663,9 @@ class GriffinCffDecoderTests: public LlvmIrTests
 			decoder._addr2bb[TraceBase + 0x4000] = case11;
 			decoder._bb2addr[case11] = TraceBase + 0x4000;
 		}
+
+		void lateUnsafeTargetDoesNotPartiallyMergeSet();
+		void missingStateDoesNotPartiallyRewriteSet();
 
 		void checkOverlappedTargets()
 		{
@@ -860,6 +908,97 @@ TEST_F(GriffinCffDecoderTests, incompleteOrBadReplayKeepsGenericTerminator)
 	}
 }
 
+void GriffinCffDecoderTests::lateUnsafeTargetDoesNotPartiallyMergeSet()
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc(i64 %state) {
+		entry:
+			%upstream = add i64 %state, 0
+			call void @__pseudo_br(i64 %upstream)
+			ret i64 0
+		}
+		define i64 @target1() {
+		entry:
+			ret i64 7
+		}
+		define i64 @target2() {
+		entry:
+			%value = add i64 1, 2
+			unreachable
+		}
+	)");
+	prepareDecoder();
+	auto* fnc = getFunctionByName("fnc");
+	auto* target1 = getFunctionByName("target1");
+	auto* target2 = getFunctionByName("target2");
+	for (auto item : {
+			std::pair<uint64_t, llvm::Function*>(0x3000, target1),
+			{0x4000, target2}})
+	{
+		decoder._addr2fnc[TraceBase + item.first] = item.second;
+		decoder._fnc2addr[item.second] = TraceBase + item.first;
+		decoder._addr2bb[TraceBase + item.first] = &item.second->getEntryBlock();
+		decoder._bb2addr[&item.second->getEntryBlock()] = TraceBase + item.first;
+	}
+	auto& entry = fnc->getEntryBlock();
+	auto* pseudo = cast<CallInst>(entry.getTerminator()->getPrevNode());
+	auto* upstream = &entry.front();
+	ASSERT_TRUE(isa<BinaryOperator>(upstream));
+	ASSERT_EQ(upstream, pseudo->getArgOperand(0));
+
+	EXPECT_FALSE(transform(TraceBase + 0x5000, pseudo));
+	EXPECT_TRUE(isa<ReturnInst>(entry.getTerminator()));
+	EXPECT_EQ(upstream, &entry.front());
+	EXPECT_EQ(upstream, pseudo->getArgOperand(0));
+	EXPECT_EQ(target1, module->getFunction("target1"));
+	EXPECT_EQ(target1, target1->getEntryBlock().getParent());
+	EXPECT_EQ(target2, target2->getEntryBlock().getParent());
+	EXPECT_EQ(4, module->getFunctionList().size());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+void GriffinCffDecoderTests::missingStateDoesNotPartiallyRewriteSet()
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc(i64 %state) {
+		entry:
+			call void @__pseudo_br(i64 %state)
+			ret i64 0
+		case7:
+			ret i64 7
+		case11:
+			ret i64 11
+		}
+	)");
+	prepareDecoder();
+	llvm::BasicBlock *entry, *case7, *case11;
+	registerTargets(entry, case7, case11);
+	auto* pseudo = cast<CallInst>(&entry->front());
+	auto targetSet = decoder._griffin->getControlTargetSet(
+			TraceBase + 0x5000, "jmp");
+	ASSERT_TRUE(targetSet);
+	ASSERT_EQ(2, targetSet->targets.size());
+	targetSet->targets[1].stateValue.reset();
+
+	EXPECT_FALSE(decoder.transformToGriffinControlFlowSet(
+			TraceBase + 0x5000, pseudo, TraceBase + 0x5005, *targetSet));
+	EXPECT_TRUE(isa<ReturnInst>(entry->getTerminator()));
+	EXPECT_EQ(case7->getParent(), case11->getParent());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinCffDecoderTests, lateUnsafeTargetDoesNotPartiallyMergeSet)
+{
+	lateUnsafeTargetDoesNotPartiallyMergeSet();
+}
+
+TEST_F(GriffinCffDecoderTests, missingStateDoesNotPartiallyRewriteSet)
+{
+	missingStateDoesNotPartiallyRewriteSet();
+}
+
 TEST_F(GriffinCffDecoderTests, outOfRangeStateCasesKeepGenericTerminator)
 {
 	parseInput(R"(
@@ -928,6 +1067,11 @@ TEST_F(GriffinDecoderTests, provedCallBecomesCall)
 TEST_F(GriffinDecoderTests, provedJumpMergesPlaceholderWithoutCall)
 {
 	provedJumpMergesPlaceholderWithoutCall();
+}
+
+TEST_F(GriffinDecoderTests, unsafeJumpTargetDoesNotBecomeCall)
+{
+	unsafeJumpTargetDoesNotBecomeCall();
 }
 
 TEST_F(GriffinDecoderTests, overlappingJumpTargetIsAllowed)

@@ -711,8 +711,7 @@ bool Decoder::cloneGriffinJumpTargetPlaceholder(
 	llvm::ReturnInst::Create(
 			_module->getContext(), oldRet->getReturnValue(), cloned);
 	targetBb = cloned;
-	_addr2bb[target] = cloned;
-	_bb2addr[cloned] = target;
+	addBasicBlock(target, cloned);
 	return true;
 }
 
@@ -838,14 +837,90 @@ bool Decoder::transformToGriffinControlFlowSet(
 	}
 
 	auto* currentFnc = pseudo->getFunction();
+
+	// Validate the complete set before merging or cloning any placeholder.
+	// Otherwise a late unresolved target would leave a partially rewritten CFG
+	// even though the pseudo branch is kept as the fallback.
+	std::set<common::Address> uniqueTargets;
+	for (const auto& flowTarget : targetSet.targets)
+	{
+		auto target = flowTarget.target;
+		if (!uniqueTargets.insert(target).second
+				|| (targetSet.stateFromPseudoArgument && !flowTarget.stateValue))
+		{
+			return false;
+		}
+
+		auto* targetBb = getBasicBlockAtAddress(target);
+		auto* targetFnc = getFunctionAtAddress(target);
+		bool overlap = target > addr && target < nextAddr;
+		if (targetBb && targetBb->getParent() != currentFnc)
+		{
+			targetFnc = targetBb->getParent();
+			// Do not split a different real function merely to resolve one
+			// member of a multi-target branch.
+			if (targetBb != &targetFnc->front())
+			{
+				return false;
+			}
+		}
+		if (targetFnc == nullptr && targetBb == nullptr && !overlap)
+		{
+			auto* containingBb = getBasicBlockContainingAddress(target);
+			auto* containingFnc = getFunctionContainingAddress(target);
+			if ((containingBb && containingBb->getParent() != currentFnc)
+					|| (containingFnc && containingFnc != currentFnc))
+			{
+				return false;
+			}
+			auto* previousBb = getBasicBlockBeforeAddress(target);
+			bool inCurrentFragment = (containingBb &&
+					containingBb->getParent() == currentFnc)
+					|| (containingFnc && containingFnc == currentFnc)
+					|| (previousBb && previousBb->getParent() == currentFnc);
+			// Unknown/external targets must remain fallbacks. An undecoded
+			// target is safe to materialize only when a selected decoding
+			// range covers it, not when it is an arbitrary external VA.
+			if (!inCurrentFragment && _ranges.get(target) == nullptr)
+			{
+				return false;
+			}
+		}
+		if (targetFnc == nullptr || targetFnc == currentFnc)
+		{
+			continue;
+		}
+
+		bool mergeable = targetBb && targetFnc->use_empty();
+		bool cloneable = targetBb
+				&& targetFnc->getReturnType() == currentFnc->getReturnType();
+		for (const auto& bb : *targetFnc)
+		{
+			if (!llvm::isa<llvm::ReturnInst>(bb.getTerminator()))
+			{
+				mergeable = false;
+				cloneable = false;
+				break;
+			}
+		}
+		if (cloneable)
+		{
+			auto* ret = llvm::cast<llvm::ReturnInst>(targetBb->getTerminator());
+			cloneable = ret->getReturnValue() == nullptr
+					|| llvm::isa<llvm::Constant>(ret->getReturnValue());
+		}
+		if (!mergeable && !cloneable)
+		{
+			LOG << "\t\t" << "Griffin CFF target is not a safe placeholder @ "
+					<< target << " -> leave complete set unresolved" << std::endl;
+			return false;
+		}
+	}
+
 	std::vector<std::pair<common::Address, llvm::BasicBlock*>> resolved;
 	for (const auto& flowTarget : targetSet.targets)
 	{
 		auto target = flowTarget.target;
-		if (targetSet.stateFromPseudoArgument && !flowTarget.stateValue)
-		{
-			return false;
-		}
 		bool overlap = target > addr && target < nextAddr;
 		llvm::Function* targetFnc = nullptr;
 		llvm::BasicBlock* targetBb = nullptr;
@@ -1187,9 +1262,16 @@ bool Decoder::getJumpTargetsFromInstruction(
 			{
 				transformToBranch(pCall, tBb);
 			}
-			else if (tFnc)
+			else if (tFnc && !_griffin)
 			{
 				transformToCall(pCall, tFnc);
+			}
+			else if (tFnc)
+			{
+				// A branch to another fragment is not a call, even when the
+				// generic symbolic target happens to name a function.
+				LOG << "\t\t" << "Griffin inter-fragment br @ " << addr
+						<< " -> leave pseudo branch unresolved" << std::endl;
 			}
 
 			// TODO: if target was from load of import addr, do not add it,
@@ -1289,7 +1371,7 @@ bool Decoder::getJumpTargetsFromInstruction(
 			{
 				transformToCondBranch(pCall, pCall->getOperand(0), tBb, tBbN);
 			}
-			else if (tFnc && tBbN
+			else if (tFnc && !_griffin && tBbN
 					&& tBbN->getParent() == pCall->getFunction())
 			{
 				transformToCondCall(pCall, pCall->getOperand(0), tFnc, tBbN);

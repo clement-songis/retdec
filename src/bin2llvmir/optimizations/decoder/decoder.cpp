@@ -11,6 +11,7 @@
 #include "retdec/utils/string.h"
 #include "retdec/utils/io/log.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder.h"
+#include "retdec/bin2llvmir/analyses/nt_wdk_prototypes.h"
 #include "retdec/bin2llvmir/utils/llvm.h"
 #include "retdec/bin2llvmir/utils/capstone.h"
 
@@ -130,6 +131,11 @@ bool Decoder::run()
 	}
 
 	initConfigFunctions();
+
+	// The decoder has now materialized imports and known targets. Refine their
+	// official NT/WDK declarations before any later pass builds a CallGraph or
+	// runs IndirectlyCalledFuncsAnalysis. This is generic type knowledge.
+	NtWdkPrototypes::apply(*_module);
 
 	if (debug_enabled && fs::exists(_config->getOutputDirectory()))
 	{

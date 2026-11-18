@@ -1,5 +1,6 @@
 
 add_executable(tests-bin2llvmir
+	analyses/nt_wdk_prototypes_tests.cpp
 	analyses/reaching_definitions_tests.cpp
 	optimizations/asm_inst_remover/asm_inst_remover_tests.cpp
 	optimizations/idioms_libgcc/idioms_libgcc_tests.cpp

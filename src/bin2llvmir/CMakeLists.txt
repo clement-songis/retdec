@@ -2,6 +2,7 @@
 add_library(bin2llvmir STATIC
 	analyses/ctor_dtor.cpp
 	analyses/indirectly_called_funcs_analysis.cpp
+	analyses/nt_wdk_prototypes.cpp
 	analyses/reachable_funcs_analysis.cpp
 	analyses/reaching_definitions.cpp
 	analyses/symbolic_tree.cpp

@@ -26,6 +26,7 @@
 #include "retdec/bin2llvmir/providers/config.h"
 #include "retdec/bin2llvmir/providers/debugformat.h"
 #include "retdec/bin2llvmir/providers/fileimage.h"
+#include "retdec/bin2llvmir/providers/griffin_sidecar.h"
 #include "retdec/bin2llvmir/providers/names.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder_debug.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder_ranges.h"
@@ -38,12 +39,12 @@
 namespace retdec {
 namespace bin2llvmir {
 
-class GriffinSidecar;
 class GriffinOverlay;
-namespace tests { class GriffinDecoderTests; }
+namespace tests { class GriffinDecoderTests; class GriffinCffDecoderTests; }
 
 class Decoder : public llvm::ModulePass
 {
+	friend class tests::GriffinCffDecoderTests;
 	public:
 		static char ID;
 		Decoder();
@@ -147,6 +148,14 @@ class Decoder : public llvm::ModulePass
 				common::Address addr,
 				llvm::CallInst* pseudo,
 				common::Address nextAddr);
+		bool transformToGriffinControlFlowSet(
+				common::Address addr,
+				llvm::CallInst* pseudo,
+				common::Address nextAddr,
+				const GriffinSidecar::ControlFlowTargetSet& targetSet);
+		bool transformToGriffinSwitch(
+				llvm::CallInst* pseudo,
+				const std::vector<std::pair<uint64_t, llvm::BasicBlock*>>& cases);
 		bool mergeGriffinJumpTarget(
 				llvm::Function* targetFnc,
 				llvm::BasicBlock* targetBb,

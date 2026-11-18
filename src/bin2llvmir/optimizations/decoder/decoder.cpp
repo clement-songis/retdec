@@ -238,14 +238,30 @@ void Decoder::removeDecodedRange(
 
 	// `eb ff` jumps to its own second byte. Preserve that exact target and
 	// the rest of the range instead of consuming it with the first decoding.
-	auto target = _griffin ? _griffin->getControlTarget(start, "jmp")
-			: std::optional<common::Address>();
+	std::vector<common::Address> targets;
+	if (_griffin)
+	{
+		if (auto targetSet = _griffin->getControlTargetSet(start, "jmp"))
+		{
+			for (const auto& target : targetSet->targets)
+			{
+				targets.push_back(target.target);
+			}
+		}
+		else if (auto target = _griffin->getControlTarget(start, "jmp"))
+		{
+			targets.push_back(*target);
+		}
+	}
 	auto* range = _ranges.getPrimary(start);
 	auto preserveEnd = range ? range->getEnd() : end;
 	_ranges.removePrimary(start, end);
-	if (target && *target > start && *target < end)
+	for (auto target : targets)
 	{
-		_ranges.addPrimary(*target, preserveEnd);
+		if (target > start && target < end)
+		{
+			_ranges.addPrimary(target, preserveEnd);
+		}
 	}
 }
 
@@ -710,6 +726,11 @@ bool Decoder::transformToGriffinJump(
 	{
 		return false;
 	}
+	if (auto targetSet = _griffin->getControlTargetSet(addr, "jmp"))
+	{
+		return transformToGriffinControlFlowSet(
+				addr, pseudo, nextAddr, *targetSet);
+	}
 	auto target = _griffin->getControlTarget(addr, "jmp");
 	if (!target)
 	{
@@ -778,6 +799,135 @@ bool Decoder::transformToGriffinJump(
 				addr);
 	}
 	LOG << "\t\t" << "Griffin jmp @ " << addr << " -> " << *target << std::endl;
+	return true;
+}
+
+/** Reconstruct only an explicitly complete, dynamically proved CFF set. */
+bool Decoder::transformToGriffinControlFlowSet(
+		common::Address addr,
+		llvm::CallInst* pseudo,
+		common::Address nextAddr,
+		const GriffinSidecar::ControlFlowTargetSet& targetSet)
+{
+	if (targetSet.targets.size() < 2 || pseudo->getNumArgOperands() == 0)
+	{
+		return false;
+	}
+	auto* controlValue = pseudo->getArgOperand(0);
+	if (targetSet.stateFromPseudoArgument)
+	{
+		if (!controlValue->getType()->isIntegerTy())
+		{
+			return false;
+		}
+	}
+	else if (!controlValue->getType()->isIntegerTy()
+			&& !controlValue->getType()->isPointerTy())
+	{
+		return false;
+	}
+
+	auto* currentFnc = pseudo->getFunction();
+	std::vector<std::pair<common::Address, llvm::BasicBlock*>> resolved;
+	for (const auto& flowTarget : targetSet.targets)
+	{
+		auto target = flowTarget.target;
+		if (targetSet.stateFromPseudoArgument && !flowTarget.stateValue)
+		{
+			return false;
+		}
+		bool overlap = target > addr && target < nextAddr;
+		llvm::Function* targetFnc = nullptr;
+		llvm::BasicBlock* targetBb = nullptr;
+		if (overlap)
+		{
+			targetBb = getBasicBlockAtAddress(target);
+			if (targetBb && targetBb->getParent() != currentFnc
+					&& !cloneGriffinJumpTargetPlaceholder(
+							targetBb->getParent(), targetBb, currentFnc, target))
+			{
+				return false;
+			}
+			if (targetBb == nullptr)
+			{
+				targetBb = createBasicBlock(target, currentFnc);
+			}
+			if (!targetBb->getPrevNode())
+			{
+				return false;
+			}
+		}
+		else
+		{
+			getOrCreateBranchTarget(target, targetBb, targetFnc, pseudo);
+			if (targetBb && targetBb->getParent() == currentFnc
+					&& targetBb->getPrevNode())
+			{
+				// Resolved inside the current Griffin fragment.
+			}
+			else if (!targetFnc
+					|| (!mergeGriffinJumpTarget(targetFnc, targetBb, currentFnc)
+							&& !cloneGriffinJumpTargetPlaceholder(
+									targetFnc, targetBb, currentFnc, target)))
+			{
+				LOG << "\t\t" << "Griffin CFF target outside current function @ "
+						<< target << " -> leave set unresolved" << std::endl;
+				return false;
+			}
+		}
+		resolved.emplace_back(target, targetBb);
+	}
+
+	bool transformed = false;
+	if (targetSet.stateFromPseudoArgument)
+	{
+		std::vector<std::pair<uint64_t, llvm::BasicBlock*>> cases;
+		for (std::size_t i = 0; i < resolved.size(); ++i)
+		{
+			cases.emplace_back(*targetSet.targets[i].stateValue, resolved[i].second);
+		}
+		transformed = transformToGriffinSwitch(pseudo, cases);
+	}
+	else
+	{
+		auto* term = pseudo->getParent()->getTerminator();
+		assert(pseudo->getNextNode() == term);
+		if (!controlValue->getType()->isPointerTy())
+		{
+			controlValue = new llvm::IntToPtrInst(
+					controlValue,
+					llvm::Type::getInt8PtrTy(_module->getContext()),
+					"griffin_cff_target",
+					term);
+		}
+		auto* indirect = llvm::IndirectBrInst::Create(
+				controlValue, resolved.size(), term);
+		for (const auto& target : resolved)
+		{
+			indirect->addDestination(target.second);
+		}
+		term->eraseFromParent();
+		transformed = true;
+	}
+	if (!transformed)
+	{
+		return false;
+	}
+
+	if (_c2l)
+	{
+		for (const auto& target : resolved)
+		{
+			_jumpTargets.push(
+					target.first,
+					JumpTarget::eType::CONTROL_FLOW_SWITCH_CASE,
+					_c2l->getBasicMode(),
+					addr);
+		}
+	}
+	LOG << "\t\t" << "Griffin CFF @ " << addr << " -> "
+			<< (targetSet.stateFromPseudoArgument ? "switch" : "indirectbr")
+			<< " (" << resolved.size() << " proved targets)" << std::endl;
 	return true;
 }
 

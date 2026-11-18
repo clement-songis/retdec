@@ -476,8 +476,10 @@ GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
 		}
 
 		bool proved = false;
+		bool provedTargetSet = false;
 		bool dynamicVerified = false;
 		uint64_t target = 0;
+		ControlTargetSet targetSet;
 		if (!result._evidenceV2)
 		{
 			auto targetIt = site.FindMember("targetRva");
@@ -566,6 +568,120 @@ GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
 				dynamicVerified = proved && classification == "dynamic-verified";
 			}
 
+			// A CFF target set is a different proof from a single observed
+			// successor. Require explicit exhaustiveness and support every
+			// target with a clean replay. Partial observed sets stay rejected.
+			if (!proved && eligible && kind == "jmp"
+					&& classification == "dynamic-verified"
+					&& boolMemberIs(site, "targetSetComplete", true)
+					&& targetsIt != site.MemberEnd()
+					&& targetsIt->value.IsArray()
+					&& targetsIt->value.Size() > 1
+					&& observationIdsIt != site.MemberEnd()
+					&& observationIdsIt->value.IsArray()
+					&& observationIdsIt->value.Size() != 0)
+			{
+				std::map<uint64_t, uint64_t> caseByTarget;
+				std::set<uint64_t> caseValues;
+				bool casesValid = true;
+				auto casesIt = site.FindMember("targetCases");
+				bool hasCases = casesIt != site.MemberEnd();
+				casesValid = hasCases || !site.HasMember("stateOperand");
+				if (hasCases)
+				{
+					casesValid = casesValid && stringMemberIs(
+									site, "stateOperand", "pseudo-arg")
+							&& casesIt->value.IsArray()
+							&& casesIt->value.Size() == targetsIt->value.Size();
+					if (casesValid)
+					{
+						for (const auto& caseValue : casesIt->value.GetArray())
+						{
+							if (!caseValue.IsObject())
+							{
+								casesValid = false;
+								break;
+							}
+							auto caseTarget = jsonAddress(
+									requiredMember(caseValue, "targetRva"), "targetRva");
+							auto state = jsonAddress(
+									requiredMember(caseValue, "stateValue"), "stateValue");
+							if (!caseByTarget.emplace(caseTarget, state).second
+									|| !caseValues.insert(state).second)
+							{
+								casesValid = false;
+								break;
+							}
+						}
+					}
+				}
+
+				std::set<uint64_t> uniqueTargets;
+				proved = casesValid;
+				for (const auto& targetValue : targetsIt->value.GetArray())
+				{
+					auto candidate = jsonAddress(targetValue, "targets[]");
+					if (candidate == 0 || candidate >= result._imageSize
+							|| !uniqueTargets.insert(candidate).second
+							|| (hasCases && caseByTarget.count(candidate) == 0))
+					{
+						proved = false;
+						break;
+					}
+					std::optional<uint64_t> state;
+					if (hasCases)
+					{
+						state = caseByTarget.at(candidate);
+					}
+					bool supportingObservation = false;
+					for (const auto& id : observationIdsIt->value.GetArray())
+					{
+						if (!id.IsString())
+						{
+							continue;
+						}
+						auto observation = observations.find(id.GetString());
+						if (observation == observations.end()
+								|| !v2ObservationMatches(
+										source, candidate, classification,
+										result._imageSha256, *observation->second))
+						{
+							continue;
+						}
+						if (state)
+						{
+							auto stateIt = observation->second->FindMember("stateValue");
+							if (stateIt == observation->second->MemberEnd()
+									|| jsonAddress(stateIt->value, "stateValue") != *state)
+							{
+								continue;
+							}
+						}
+						supportingObservation = true;
+						break;
+					}
+					if (!supportingObservation)
+					{
+						proved = false;
+						break;
+					}
+					targetSet.targets.push_back(ControlTarget{
+							candidate, kind, classification, state});
+				}
+				proved = proved
+						&& uniqueTargets.size() == targetsIt->value.Size()
+						&& (!hasCases || caseByTarget.size() == uniqueTargets.size());
+				if (proved)
+				{
+					targetSet.stateFromPseudoArgument = hasCases;
+					provedTargetSet = true;
+				}
+				else
+				{
+					targetSet.targets.clear();
+				}
+			}
+
 			// The ret hook remains restricted to stack trampolines, even when
 			// v2 marks an ordinary return edge as provider-eligible.
 			if (proved && kind == "ret")
@@ -588,10 +704,18 @@ GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
 			}
 		}
 
-		if (proved)
+		if (provedTargetSet)
+		{
+			auto inserted = result._controlTargetSets.emplace(source, targetSet);
+			if (!inserted.second)
+			{
+				throw std::runtime_error("conflicting Griffin CFF target-set evidence");
+			}
+		}
+		else if (proved)
 		{
 			ControlTarget controlTarget{target, kind,
-					dynamicVerified ? "dynamic-verified" : "static"};
+					dynamicVerified ? "dynamic-verified" : "static", std::nullopt};
 			auto inserted = result._controlTargets.emplace(source, controlTarget);
 			if (!inserted.second
 					&& (inserted.first->second.targetRva != target
@@ -645,6 +769,14 @@ GriffinSidecar::ControlStatus GriffinSidecar::getControlStatus(
 		{
 			return ControlStatus::Proven;
 		}
+		if (_controlTargetSets.count(source))
+		{
+			const auto& targets = _controlTargetSets.at(source).targets;
+			if (!targets.empty() && targets.front().kind == kind)
+			{
+				return ControlStatus::Proven;
+			}
+		}
 		if (_rejectedControlTargets.count(source)
 				&& _rejectedControlTargets.at(source) == kind)
 		{
@@ -688,6 +820,40 @@ std::optional<Address> GriffinSidecar::getControlTarget(
 	return getTarget(site, kind);
 }
 
+std::optional<GriffinSidecar::ControlFlowTargetSet>
+GriffinSidecar::getControlTargetSet(
+		Address site,
+		const std::string& kind) const
+{
+	if (site.isUndefined())
+	{
+		return std::nullopt;
+	}
+	for (uint64_t base : _bases)
+	{
+		uint64_t value = site.getValue();
+		if (value < base || value - base >= _imageSize)
+		{
+			continue;
+		}
+		auto it = _controlTargetSets.find(value - base);
+		if (it == _controlTargetSets.end() || it->second.targets.empty()
+				|| it->second.targets.front().kind != kind)
+		{
+			return std::nullopt;
+		}
+		ControlFlowTargetSet result;
+		result.stateFromPseudoArgument = it->second.stateFromPseudoArgument;
+		for (const auto& target : it->second.targets)
+		{
+			result.targets.push_back(ControlFlowTarget{
+					Address(base + target.targetRva), target.stateValue});
+		}
+		return result;
+	}
+	return std::nullopt;
+}
+
 std::optional<Address> GriffinSidecar::getRetTrampolineTarget(Address site) const
 {
 	return getTarget(site, "ret");
@@ -709,6 +875,11 @@ bool GriffinSidecar::isEvidenceV2() const
 std::size_t GriffinSidecar::getControlTargetCount() const
 {
 	return _controlTargets.size();
+}
+
+std::size_t GriffinSidecar::getControlTargetSetCount() const
+{
+	return _controlTargetSets.size();
 }
 
 std::size_t GriffinSidecar::getDynamicVerifiedTargetCount() const

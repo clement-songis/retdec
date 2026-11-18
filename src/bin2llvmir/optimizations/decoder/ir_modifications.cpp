@@ -142,6 +142,54 @@ llvm::SwitchInst* Decoder::transformToSwitch(
 	return sw;
 }
 
+/** Build a switch from proved state/target pairs and fold constant states. */
+bool Decoder::transformToGriffinSwitch(
+		llvm::CallInst* pseudo,
+		const std::vector<std::pair<uint64_t, llvm::BasicBlock*>>& cases)
+{
+	if (pseudo == nullptr || pseudo->getNumArgOperands() == 0 || cases.size() < 2)
+	{
+		return false;
+	}
+	auto* value = pseudo->getArgOperand(0);
+	auto* intType = llvm::dyn_cast<llvm::IntegerType>(value->getType());
+	if (intType == nullptr)
+	{
+		return false;
+	}
+	auto* term = pseudo->getParent()->getTerminator();
+	assert(pseudo->getNextNode() == term);
+	auto* defaultBb = llvm::BasicBlock::Create(
+			_module->getContext(), "griffin_cff_default", pseudo->getFunction());
+	new llvm::UnreachableInst(_module->getContext(), defaultBb);
+	auto* sw = llvm::SwitchInst::Create(
+			value, defaultBb, cases.size(), term);
+	for (const auto& item : cases)
+	{
+		sw->addCase(llvm::ConstantInt::get(intType, item.first), item.second);
+	}
+	term->eraseFromParent();
+
+	// Fold only an actually constant state. Other stores are left to the
+	// normal DCE passes instead of guessing that a state variable is dead.
+	if (auto* constant = llvm::dyn_cast<llvm::ConstantInt>(value))
+	{
+		auto* selected = defaultBb;
+		auto found = sw->findCaseValue(constant);
+		if (found != sw->case_default())
+		{
+			selected = found->getCaseSuccessor();
+		}
+		llvm::BranchInst::Create(selected, sw);
+		sw->eraseFromParent();
+		if (defaultBb->use_empty())
+		{
+			defaultBb->eraseFromParent();
+		}
+	}
+	return true;
+}
+
 /**
  * TODO: We should get registers based on the ABI the function is using,
  * not the same register for all calls on an architecture.

@@ -46,6 +46,18 @@ class GriffinSidecar
 			StackSlotRole role = StackSlotRole::Unknown;
 		};
 
+		struct ControlFlowTarget
+		{
+			common::Address target;
+			std::optional<uint64_t> stateValue;
+		};
+
+		struct ControlFlowTargetSet
+		{
+			std::vector<ControlFlowTarget> targets;
+			bool stateFromPseudoArgument = false;
+		};
+
 		enum class ControlStatus
 		{
 			Unknown,
@@ -61,6 +73,9 @@ class GriffinSidecar
 		std::optional<common::Address> getControlTarget(
 				common::Address site,
 				const std::string& kind) const;
+		std::optional<ControlFlowTargetSet> getControlTargetSet(
+				common::Address site,
+				const std::string& kind) const;
 		std::optional<common::Address> getRetTrampolineTarget(
 				common::Address site) const;
 		std::optional<StackSlot> getStackSlot(common::Address site) const;
@@ -68,6 +83,7 @@ class GriffinSidecar
 		bool checkImageSha256(const std::string& actualSha256) const;
 		bool isEvidenceV2() const;
 		std::size_t getControlTargetCount() const;
+		std::size_t getControlTargetSetCount() const;
 		std::size_t getDynamicVerifiedTargetCount() const;
 		std::size_t getRetTargetCount() const;
 		std::size_t getUnresolvedRetCount() const;
@@ -80,6 +96,13 @@ class GriffinSidecar
 			uint64_t targetRva = 0;
 			std::string kind;
 			std::string classification;
+			std::optional<uint64_t> stateValue;
+		};
+
+		struct ControlTargetSet
+		{
+			std::vector<ControlTarget> targets;
+			bool stateFromPseudoArgument = false;
 		};
 
 		std::optional<common::Address> getTarget(
@@ -91,6 +114,7 @@ class GriffinSidecar
 		bool _evidenceV2 = false;
 		std::string _imageSha256;
 		std::map<uint64_t, ControlTarget> _controlTargets;
+		std::map<uint64_t, ControlTargetSet> _controlTargetSets;
 		std::map<uint64_t, std::string> _rejectedControlTargets;
 		std::size_t _dynamicVerifiedTargetCount = 0;
 		std::map<uint64_t, uint64_t> _retTargets;

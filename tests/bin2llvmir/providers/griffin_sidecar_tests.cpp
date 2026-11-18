@@ -136,6 +136,67 @@ TEST_F(GriffinSidecarStackTests, realObservationsRemainUnknownWithoutRoleProof)
 	EXPECT_EQ(GriffinSidecar::StackSlotRole::Unknown, slot->role);
 }
 
+class GriffinSidecarCffTests: public LlvmIrTests
+{
+};
+
+TEST_F(GriffinSidecarCffTests, acceptsOnlyCompleteReplayedTargetSets)
+{
+	auto sidecar = GriffinSidecar::fromFile(RETDEC_GRIFFIN_CFF_TEST_SIDECAR);
+
+	EXPECT_EQ(3, sidecar.getControlTargetSetCount());
+	EXPECT_EQ(0, sidecar.getControlTargetCount());
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+			sidecar.getControlStatus(TraceBase + 0x5000, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+			sidecar.getControlStatus(TraceBase + 0x6000, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0x7000, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0x7010, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0x9000, "jmp"));
+	EXPECT_FALSE(sidecar.getControlTargetSet(TraceBase + 0x7000, "jmp"));
+	EXPECT_FALSE(sidecar.getControlTargetSet(TraceBase + 0x7010, "jmp"));
+	EXPECT_FALSE(sidecar.getControlTargetSet(TraceBase + 0x9000, "jmp"));
+}
+
+TEST_F(GriffinSidecarCffTests, exposesStateCasesOnlyWithMatchingObservations)
+{
+	auto sidecar = GriffinSidecar::fromFile(RETDEC_GRIFFIN_CFF_TEST_SIDECAR);
+	auto switchSet = sidecar.getControlTargetSet(TraceBase + 0x5000, "jmp");
+	ASSERT_TRUE(switchSet);
+	ASSERT_EQ(2, switchSet->targets.size());
+	EXPECT_TRUE(switchSet->stateFromPseudoArgument);
+	EXPECT_EQ(TraceBase + 0x3000, switchSet->targets[0].target);
+	ASSERT_TRUE(switchSet->targets[0].stateValue);
+	EXPECT_EQ(7, *switchSet->targets[0].stateValue);
+	EXPECT_EQ(TraceBase + 0x4000, switchSet->targets[1].target);
+	ASSERT_TRUE(switchSet->targets[1].stateValue);
+	EXPECT_EQ(11, *switchSet->targets[1].stateValue);
+
+	auto indirectSet = sidecar.getControlTargetSet(RuntimeBase + 0x6000, "jmp");
+	ASSERT_TRUE(indirectSet);
+	EXPECT_FALSE(indirectSet->stateFromPseudoArgument);
+	EXPECT_EQ(RuntimeBase + 0x3000, indirectSet->targets[0].target);
+	EXPECT_FALSE(indirectSet->targets[0].stateValue);
+}
+
+TEST_F(GriffinSidecarCffTests, realObservedSetsStayRejectedWithoutCompletenessProof)
+{
+	const char* path = std::getenv("RETDEC_GRIFFIN_REAL_STACK_SIDECAR");
+	if (path == nullptr)
+	{
+		GTEST_SKIP() << "RETDEC_GRIFFIN_REAL_STACK_SIDECAR not set";
+	}
+	auto sidecar = GriffinSidecar::fromFile(path);
+
+	EXPECT_EQ(0, sidecar.getControlTargetSetCount());
+	EXPECT_FALSE(sidecar.getControlTargetSet(TraceBase + 0x2a5377, "ret"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0x2a5377, "ret"));
+}
+
 TEST_F(GriffinSidecarV2Tests, witnessPromotesStaticAndDynamicVerifiedOnly)
 {
 	const char* path = std::getenv("RETDEC_GRIFFIN_V2_WITNESS");
@@ -220,6 +281,7 @@ TEST_F(GriffinSidecarV2Tests, rejectsScratchAmbiguousMultiTargetAndBadReplay)
 class GriffinDecoderTests: public LlvmIrTests
 {
 	protected:
+		std::unique_ptr<Config> v2Config;
 		Decoder decoder;
 		GriffinSidecar sidecar = loadFixture();
 
@@ -350,11 +412,11 @@ class GriffinDecoderTests: public LlvmIrTests
 
 		void prepareV2Decoder()
 		{
-			auto config = Config::empty(module.get());
-			config.getConfig().architecture.setName("x86-64");
+			v2Config = std::make_unique<Config>(Config::empty(module.get()));
+			v2Config->getConfig().architecture.setName("x86-64");
 			decoder._module = module.get();
-			decoder._config = &config;
-			decoder._abi = AbiProvider::addAbi(module.get(), &config);
+			decoder._config = v2Config.get();
+			decoder._abi = AbiProvider::addAbi(module.get(), v2Config.get());
 			decoder._griffin = std::make_unique<GriffinSidecar>(
 					GriffinSidecar::fromFile(std::getenv("RETDEC_GRIFFIN_V2_WITNESS")));
 		}
@@ -485,6 +547,174 @@ class GriffinDecoderTests: public LlvmIrTests
 			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(rejected));
 		}
 };
+
+class GriffinCffDecoderTests: public LlvmIrTests
+{
+	protected:
+		Decoder decoder;
+
+		bool transform(common::Address site, llvm::CallInst* pseudo)
+		{
+			return decoder.transformToGriffinJump(site, pseudo, site + 5);
+		}
+
+		void prepareDecoder()
+		{
+			decoder._module = module.get();
+			decoder._griffin = std::make_unique<GriffinSidecar>(
+					GriffinSidecar::fromFile(RETDEC_GRIFFIN_CFF_TEST_SIDECAR));
+		}
+
+		void registerTargets(
+				llvm::BasicBlock*& entry,
+				llvm::BasicBlock*& case7,
+				llvm::BasicBlock*& case11)
+		{
+			auto* fnc = getFunctionByName("fnc");
+			auto it = fnc->begin();
+			entry = &*it++;
+			case7 = &*it++;
+			case11 = &*it;
+			decoder._addr2bb[TraceBase + 0x3000] = case7;
+			decoder._bb2addr[case7] = TraceBase + 0x3000;
+			decoder._addr2bb[TraceBase + 0x4000] = case11;
+			decoder._bb2addr[case11] = TraceBase + 0x4000;
+		}
+
+		void checkOverlappedTargets()
+		{
+			prepareDecoder();
+			decoder._griffinOverlay = std::make_unique<GriffinOverlay>(
+					GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_TEST));
+			auto start = TraceBase + 0x8000;
+			auto end = TraceBase + 0x8003;
+			decoder._ranges.addPrimary(start, end);
+
+			decoder.removeDecodedRange(start, end, false);
+
+			auto* first = decoder._ranges.getPrimary(TraceBase + 0x8001);
+			auto* second = decoder._ranges.getPrimary(TraceBase + 0x8002);
+			ASSERT_NE(nullptr, first);
+			ASSERT_NE(nullptr, second);
+			EXPECT_EQ(TraceBase + 0x8001, first->getStart());
+			EXPECT_EQ(end, first->getEnd());
+			EXPECT_TRUE(first->contains(TraceBase + 0x8002));
+		}
+};
+
+TEST_F(GriffinCffDecoderTests, provedStateSetBecomesSwitch)
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc(i64 %state) {
+		entry:
+			call void @__pseudo_br(i64 %state)
+			ret i64 0
+		case7:
+			ret i64 7
+		case11:
+			ret i64 11
+		}
+	)");
+	prepareDecoder();
+	llvm::BasicBlock *entry, *case7, *case11;
+	registerTargets(entry, case7, case11);
+	auto* pseudo = cast<CallInst>(&entry->front());
+	ASSERT_TRUE(transform(TraceBase + 0x5000, pseudo));
+	auto* sw = dyn_cast<SwitchInst>(entry->getTerminator());
+	ASSERT_NE(nullptr, sw);
+	EXPECT_EQ(2, sw->getNumCases());
+	EXPECT_EQ(case7, sw->findCaseValue(ConstantInt::get(Type::getInt64Ty(context), 7))
+			->getCaseSuccessor());
+	EXPECT_TRUE(isa<UnreachableInst>(sw->getDefaultDest()->getTerminator()));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinCffDecoderTests, constantStateIsReducedToDirectBranch)
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc() {
+		entry:
+			call void @__pseudo_br(i64 7)
+			ret i64 0
+		case7:
+			ret i64 7
+		case11:
+			ret i64 11
+		}
+	)");
+	prepareDecoder();
+	llvm::BasicBlock *entry, *case7, *case11;
+	registerTargets(entry, case7, case11);
+	auto* pseudo = cast<CallInst>(&entry->front());
+	ASSERT_TRUE(transform(TraceBase + 0x5000, pseudo));
+	auto* branch = dyn_cast<BranchInst>(entry->getTerminator());
+	ASSERT_NE(nullptr, branch);
+	EXPECT_TRUE(branch->isUnconditional());
+	EXPECT_EQ(case7, branch->getSuccessor(0));
+	EXPECT_EQ(0, std::count_if(entry->begin(), entry->end(),
+			[](const Instruction& i) { return isa<SwitchInst>(i); }));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinCffDecoderTests, completeTargetSetWithoutStatesBecomesIndirectBranch)
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc(i64 %target) {
+		entry:
+			call void @__pseudo_br(i64 %target)
+			ret i64 0
+		case7:
+			ret i64 7
+		case11:
+			ret i64 11
+		}
+	)");
+	prepareDecoder();
+	llvm::BasicBlock *entry, *case7, *case11;
+	registerTargets(entry, case7, case11);
+	auto* pseudo = cast<CallInst>(&entry->front());
+	ASSERT_TRUE(transform(TraceBase + 0x6000, pseudo));
+	auto* indirect = dyn_cast<IndirectBrInst>(entry->getTerminator());
+	ASSERT_NE(nullptr, indirect);
+	ASSERT_EQ(2, indirect->getNumDestinations());
+	EXPECT_EQ(case7, indirect->getDestination(0));
+	EXPECT_EQ(case11, indirect->getDestination(1));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinCffDecoderTests, incompleteOrBadReplayKeepsGenericTerminator)
+{
+	for (uint64_t site : {0x7000, 0x7010})
+	{
+		parseInput(R"(
+			declare void @__pseudo_br(i64)
+			define i64 @fnc(i64 %target) {
+			entry:
+				call void @__pseudo_br(i64 %target)
+				ret i64 0
+			case7:
+				ret i64 7
+			case11:
+				ret i64 11
+			}
+		)");
+		prepareDecoder();
+		llvm::BasicBlock *entry, *case7, *case11;
+		registerTargets(entry, case7, case11);
+		auto* pseudo = cast<CallInst>(&entry->front());
+		EXPECT_FALSE(transform(TraceBase + site, pseudo));
+		EXPECT_TRUE(isa<ReturnInst>(entry->getTerminator()));
+		EXPECT_FALSE(verifyModule(*module, &errs()));
+	}
+}
+
+TEST_F(GriffinCffDecoderTests, overlappedTargetSetKeepsCoverageForEveryTarget)
+{
+	checkOverlappedTargets();
+}
 
 TEST_F(GriffinDecoderTests, provedRetTrampolineBecomesBranchNotReturn)
 {

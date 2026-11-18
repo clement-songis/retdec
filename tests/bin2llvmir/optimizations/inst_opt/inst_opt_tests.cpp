@@ -726,6 +726,82 @@ TEST_F(OptimizeTests, castSequence_float_int_flot_global)
 	EXPECT_TRUE(ret);
 }
 
+TEST_F(OptimizeTests, mbaAddOrAndZext32To64)
+{
+	parseInput(R"(
+		define i64 @fnc(i32 %a, i32 %b) {
+			%o = or i32 %a, %b
+			%n = and i32 %a, %b
+			%zo = zext i32 %o to i64
+			%zn = zext i32 %n to i64
+			%x = add i64 %zo, %zn
+			ret i64 %x
+		}
+	)");
+	EXPECT_TRUE(inst_opt::optimize(getInstructionByName("x")));
+	auto* sum = getInstructionByName("x");
+	ASSERT_EQ(Instruction::Add, sum->getOpcode());
+	EXPECT_TRUE(sum->getType()->isIntegerTy(64));
+	EXPECT_TRUE(isa<ZExtInst>(sum->getOperand(0)));
+	EXPECT_TRUE(isa<ZExtInst>(sum->getOperand(1)));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(OptimizeTests, mbaAddOrAndSext32To64)
+{
+	parseInput(R"(
+		define i64 @fnc(i32 %a, i32 %b) {
+			%o = or i32 %a, %b
+			%n = and i32 %b, %a
+			%so = sext i32 %o to i64
+			%sn = sext i32 %n to i64
+			%x = add i64 %sn, %so
+			ret i64 %x
+		}
+	)");
+	EXPECT_TRUE(inst_opt::optimize(getInstructionByName("x")));
+	auto* sum = getInstructionByName("x");
+	ASSERT_EQ(Instruction::Add, sum->getOpcode());
+	EXPECT_TRUE(isa<SExtInst>(sum->getOperand(0)));
+	EXPECT_TRUE(isa<SExtInst>(sum->getOperand(1)));
+}
+
+TEST_F(OptimizeTests, mbaAddOrAndTrunc64To32)
+{
+	parseInput(R"(
+		define i32 @fnc(i64 %a, i64 %b) {
+			%o = or i64 %a, %b
+			%n = and i64 %a, %b
+			%to = trunc i64 %o to i32
+			%tn = trunc i64 %n to i32
+			%x = add i32 %to, %tn
+			ret i32 %x
+		}
+	)");
+	EXPECT_TRUE(inst_opt::optimize(getInstructionByName("x")));
+	auto* trunc = dyn_cast<TruncInst>(getInstructionByName("x"));
+	ASSERT_NE(nullptr, trunc);
+	auto* sum = dyn_cast<BinaryOperator>(trunc->getOperand(0));
+	ASSERT_NE(nullptr, sum);
+	EXPECT_EQ(Instruction::Add, sum->getOpcode());
+	EXPECT_TRUE(sum->getType()->isIntegerTy(64));
+}
+
+TEST_F(OptimizeTests, mbaAddOrAndCastsRejectsDifferentPairs)
+{
+	parseInput(R"(
+		define i64 @fnc(i32 %a, i32 %b, i32 %c) {
+			%o = or i32 %a, %b
+			%n = and i32 %a, %c
+			%zo = zext i32 %o to i64
+			%zn = zext i32 %n to i64
+			%x = add i64 %zo, %zn
+			ret i64 %x
+		}
+	)");
+	EXPECT_FALSE(inst_opt::optimize(getInstructionByName("x")));
+}
+
 } // namespace tests
 } // namespace bin2llvmir
 } // namespace retdec

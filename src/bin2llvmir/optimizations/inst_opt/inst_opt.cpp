@@ -713,6 +713,82 @@ bool mbaAddOrAnd(llvm::Instruction* insn)
 }
 
 /**
+ * MBA ADD through explicit 32/64-bit casts.
+ *
+ * zext/sext: cast(or) + cast(and) => cast(a) + cast(b), at root width.
+ * trunc:     trunc(or) + trunc(and) => trunc(a + b), at source width.
+ *
+ * Keeping the original root/source arithmetic width is essential: replacing
+ * a widened sum by a widened *wrapped* 32-bit sum would drop its carry.
+ */
+bool mbaAddOrAndCasts(llvm::Instruction* insn)
+{
+	Value* p0; Value* p1;
+	if (!match(insn, m_Add(m_Value(p0), m_Value(p1))))
+	{
+		return false;
+	}
+	for (int swap = 0; swap < 2; ++swap)
+	{
+		auto* orCast = dyn_cast<CastInst>(swap ? p1 : p0);
+		auto* andCast = dyn_cast<CastInst>(swap ? p0 : p1);
+		if (orCast == nullptr || andCast == nullptr
+				|| orCast->getOpcode() != andCast->getOpcode())
+		{
+			continue;
+		}
+		auto* orOp = dyn_cast<BinaryOperator>(orCast->getOperand(0));
+		auto* andOp = dyn_cast<BinaryOperator>(andCast->getOperand(0));
+		if (orOp == nullptr || andOp == nullptr
+				|| orOp->getOpcode() != Instruction::Or
+				|| andOp->getOpcode() != Instruction::And)
+		{
+			continue;
+		}
+		Value* a = orOp->getOperand(0);
+		Value* b = orOp->getOperand(1);
+		if (!((andOp->getOperand(0) == a && andOp->getOperand(1) == b)
+				|| (andOp->getOperand(0) == b && andOp->getOperand(1) == a)))
+		{
+			continue;
+		}
+		auto opcode = orCast->getOpcode();
+		bool widen = opcode == Instruction::ZExt || opcode == Instruction::SExt;
+		bool narrow = opcode == Instruction::Trunc;
+		if (!widen && !narrow)
+		{
+			continue;
+		}
+		auto* innerType = dyn_cast<IntegerType>(orOp->getType());
+		auto* rootType = dyn_cast<IntegerType>(insn->getType());
+		if (innerType == nullptr || rootType == nullptr
+				|| andOp->getType() != innerType
+				|| (widen && !(innerType->getBitWidth() == 32
+						&& rootType->getBitWidth() == 64))
+				|| (narrow && !(innerType->getBitWidth() == 64
+						&& rootType->getBitWidth() == 32)))
+		{
+			continue;
+		}
+
+		Instruction* result = nullptr;
+		if (widen)
+		{
+			auto* ca = CastInst::Create(opcode, a, rootType, "", insn);
+			auto* cb = CastInst::Create(opcode, b, rootType, "", insn);
+			result = BinaryOperator::CreateAdd(ca, cb, "", insn);
+		}
+		else
+		{
+			auto* sum = BinaryOperator::CreateAdd(a, b, "", insn);
+			result = new TruncInst(sum, rootType, "", insn);
+		}
+		return replaceWith(insn, result);
+	}
+	return false;
+}
+
+/**
  * Double negation:
  *
  * x = ~(~a)
@@ -947,6 +1023,7 @@ std::vector<bool (*)(llvm::Instruction*)> optimizations =
 		&mbaXorSubOrAnd,
 		&mbaXorNandNor,
 		&mbaAddOrAnd,
+		&mbaAddOrAndCasts,
 		&absorptionComplement,
 		&absorptionSimple,
 		&andOrComplement,

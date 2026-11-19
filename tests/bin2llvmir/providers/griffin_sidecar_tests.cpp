@@ -473,6 +473,7 @@ class GriffinDecoderTests: public LlvmIrTests
 					call void @__pseudo_br(i64 1)
 					call void @__pseudo_br(i64 2)
 					call void @__pseudo_br(i64 3)
+					call void @__pseudo_br(i64 4)
 					call void @__pseudo_ret(i64 0)
 					ret i64 0
 				}
@@ -481,7 +482,7 @@ class GriffinDecoderTests: public LlvmIrTests
 			auto before = llvmObjToString(module.get());
 			auto& entry = getFunctionByName("fnc")->getEntryBlock();
 			auto it = entry.begin();
-			for (uint64_t site : {0xbeef, 0xcafe, 0xdead})
+			for (uint64_t site : {0x58df90, 0xbeef, 0xcafe, 0xdead})
 			{
 				auto* pseudo = cast<CallInst>(&*it++);
 				EXPECT_FALSE(decoder.transformToGriffinJump(
@@ -538,17 +539,19 @@ class GriffinDecoderTests: public LlvmIrTests
 				}
 			)");
 			prepareV2Decoder();
+			decoder._griffin = std::make_unique<GriffinSidecar>(
+					GriffinSidecar::fromFile(RETDEC_GRIFFIN_CFF_TEST_SIDECAR));
 			auto* fnc = getFunctionByName("fnc");
 			auto* targetFnc = getFunctionByName("target");
 			auto* targetBb = &targetFnc->getEntryBlock();
-			decoder._addr2fnc[TraceBase + 0x27cee7] = targetFnc;
-			decoder._fnc2addr[targetFnc] = TraceBase + 0x27cee7;
-			decoder._addr2bb[TraceBase + 0x27cee7] = targetBb;
-			decoder._bb2addr[targetBb] = TraceBase + 0x27cee7;
+			decoder._addr2fnc[TraceBase + 0x3000] = targetFnc;
+			decoder._fnc2addr[targetFnc] = TraceBase + 0x3000;
+			decoder._addr2bb[TraceBase + 0x3000] = targetBb;
+			decoder._bb2addr[targetBb] = TraceBase + 0x3000;
 			auto& entry = fnc->getEntryBlock();
 			auto* pseudo = cast<CallInst>(&entry.front());
 			ASSERT_TRUE(decoder.transformToGriffinJump(
-					TraceBase + 0x58df90, pseudo, TraceBase + 0x58df92));
+					TraceBase + 0xa010, pseudo, TraceBase + 0xa012));
 			auto* branch = cast<BranchInst>(entry.getTerminator());
 			EXPECT_EQ(fnc, branch->getSuccessor(0)->getParent());
 			EXPECT_EQ(2, module->getFunctionList().size());

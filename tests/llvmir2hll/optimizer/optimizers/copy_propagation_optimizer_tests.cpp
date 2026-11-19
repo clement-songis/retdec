@@ -1102,6 +1102,41 @@ DoNotOptimizeWhenAuxiliaryVariableIsExternal) {
 		"expected `" << returnB << "`, got `" << stmt2 << "`";
 }
 
+TEST_F(CopyPropagationOptimizerTests,
+SameVariableDefinitionsKeepDeterministicOrderAndSemantics) {
+	// Two definitions of the same variable have equally sized use sets. This
+	// exercises deterministic DU ordering while statement representations are
+	// memoized locally by the optimizer.
+	//
+	// if (h) {
+	//     g = 1;
+	// } else {
+	//     g = 2;
+	// }
+	// return g;
+	//
+	ShPtr<Variable> varG(Variable::create("g", IntType::create(32)));
+	ShPtr<Variable> varH(Variable::create("h", IntType::create(32)));
+	module->addGlobalVar(varG);
+	module->addGlobalVar(varH);
+	ShPtr<ReturnStmt> returnG(ReturnStmt::create(varG));
+	ShPtr<AssignStmt> assignG1(AssignStmt::create(varG, ConstInt::create(1, 32)));
+	ShPtr<AssignStmt> assignG2(AssignStmt::create(varG, ConstInt::create(2, 32)));
+	ShPtr<IfStmt> ifStmt(IfStmt::create(varH, assignG1, returnG));
+	ifStmt->setElseClause(assignG2);
+	testFunc->setBody(ifStmt);
+
+	INSTANTIATE_ALIAS_ANALYSIS_AND_VALUE_ANALYSIS(module);
+	Optimizer::optimize<CopyPropagationOptimizer>(module, va,
+		OptimCallInfoObtainer::create());
+
+	ASSERT_EQ(ifStmt, testFunc->getBody());
+	EXPECT_EQ(ifStmt->getFirstIfBody(), assignG1);
+	EXPECT_EQ(ifStmt->getElseClause(), assignG2);
+	EXPECT_EQ(ifStmt->getSuccessor(), returnG);
+	EXPECT_EQ(returnG->getRetVal(), varG);
+}
+
 } // namespace tests
 } // namespace llvmir2hll
 } // namespace retdec

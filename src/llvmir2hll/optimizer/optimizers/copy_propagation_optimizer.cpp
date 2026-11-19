@@ -55,6 +55,25 @@ namespace {
 const unsigned MAX_STMT_LENGTH = 120;
 
 /**
+ * Text representations are the expensive part of deterministic DU ordering.
+ * The cache lives only for one sort: statements are mutated after ordered()
+ * returns, so no stale representation can survive into the next iteration.
+ */
+class StatementTextCache {
+public:
+	const std::string& get(const ShPtr<Statement>& stmt) {
+		auto it = reprs.find(stmt.get());
+		if (it == reprs.end()) {
+			it = reprs.emplace(stmt.get(), stmt->getTextRepr()).first;
+		}
+		return it->second;
+	}
+
+private:
+	std::map<const Statement*, std::string> reprs;
+};
+
+/**
 * @brief Returns an ordered version of the given statement set.
 */
 auto ordered(const StmtSet &stmts) {
@@ -70,10 +89,10 @@ auto ordered(const StmtSet &stmts) {
 /**
 * @brief Returns text representations of statements in the given set.
 */
-auto textReprs(const StmtSet &stmts) {
+auto textReprs(const StmtSet &stmts, StatementTextCache &cache) {
 	StringSet reprs;
 	for (auto &stmt : stmts) {
-		reprs.insert(stmt->getTextRepr());
+		reprs.insert(cache.get(stmt));
 	}
 	return reprs;
 }
@@ -81,7 +100,10 @@ auto textReprs(const StmtSet &stmts) {
 /**
 * @brief Compares the given two statements from in DU chains.
 */
-int compareStmtsInDUChains(const ShPtr<Statement> &s1, const ShPtr<Statement> &s2) {
+int compareStmtsInDUChains(
+		const ShPtr<Statement> &s1,
+		const ShPtr<Statement> &s2,
+		StatementTextCache &cache) {
 	if (!s1 && !s2) {
 		return 0;
 	} else if (s1 && !s2) {
@@ -90,8 +112,8 @@ int compareStmtsInDUChains(const ShPtr<Statement> &s1, const ShPtr<Statement> &s
 		return -1;
 	}
 
-	const auto &s1Repr = s1->getTextRepr();
-	const auto &s2Repr = s2->getTextRepr();
+	const auto &s1Repr = cache.get(s1);
+	const auto &s2Repr = cache.get(s2);
 	return s1Repr.compare(s2Repr);
 }
 
@@ -100,7 +122,8 @@ int compareStmtsInDUChains(const ShPtr<Statement> &s1, const ShPtr<Statement> &s
 */
 auto ordered(const DefUseChains::DefUseChain &du) {
 	std::vector<std::pair<DefUseChains::StmtVarPair, StmtSet>> v(du.begin(), du.end());
-	std::sort(v.begin(), v.end(), [](const auto &p1, const auto &p2) {
+	StatementTextCache cache;
+	std::sort(v.begin(), v.end(), [&cache](const auto &p1, const auto &p2) {
 		auto v1 = p1.first.second;
 		auto v2 = p2.first.second;
 		auto s1 = p1.first.first;
@@ -129,7 +152,7 @@ auto ordered(const DefUseChains::DefUseChain &du) {
 
 		// Check the statements. We have to use getTextRepr() because
 		// there is no other way of comparing the statements.
-		cmpResult = compareStmtsInDUChains(s1, s2);
+		cmpResult = compareStmtsInDUChains(s1, s2, cache);
 		if (cmpResult != 0) {
 			return cmpResult < 0;
 		}
@@ -137,7 +160,7 @@ auto ordered(const DefUseChains::DefUseChain &du) {
 		// Uses sizes, variables, and statements are equal, so we have to check
 		// text representations of uses. This is time-consuming, so we do this
 		// here, after previous checks were inconclusive.
-		cmpResult = textReprs(p1.second) < textReprs(p2.second);
+		cmpResult = textReprs(p1.second, cache) < textReprs(p2.second, cache);
 		if (cmpResult != 0) {
 			return cmpResult < 0;
 		}
@@ -147,12 +170,12 @@ auto ordered(const DefUseChains::DefUseChain &du) {
 		// consuming, so we do this as the very last check.
 		//
 		// Parent:
-		cmpResult = compareStmtsInDUChains(s1->getParent(), s2->getParent());
+		cmpResult = compareStmtsInDUChains(s1->getParent(), s2->getParent(), cache);
 		if (cmpResult != 0) {
 			return cmpResult < 0;
 		}
 		// Successor:
-		cmpResult = compareStmtsInDUChains(s1->getSuccessor(), s2->getSuccessor());
+		cmpResult = compareStmtsInDUChains(s1->getSuccessor(), s2->getSuccessor(), cache);
 		if (cmpResult != 0) {
 			return cmpResult < 0;
 		}
@@ -167,7 +190,7 @@ auto ordered(const DefUseChains::DefUseChain &du) {
 			} else if (s1PredSize > 0 && s2PredSize > 0) {
 				const auto &s1Pred = *s1->predecessor_begin();
 				const auto &s2Pred = *s2->predecessor_begin();
-				cmpResult = compareStmtsInDUChains(s1Pred, s2Pred);
+				cmpResult = compareStmtsInDUChains(s1Pred, s2Pred, cache);
 				if (cmpResult != 0) {
 					return cmpResult < 0;
 				}

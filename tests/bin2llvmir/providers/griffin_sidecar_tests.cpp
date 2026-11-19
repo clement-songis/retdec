@@ -313,7 +313,6 @@ class GriffinDecoderTests: public LlvmIrTests
 		std::unique_ptr<Config> v2Config;
 		Decoder decoder;
 		GriffinSidecar sidecar = loadFixture();
-		std::unique_ptr<Config> v2Config;
 
 		void prepareDecoder()
 		{

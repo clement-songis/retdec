@@ -1,0 +1,37 @@
+{
+  "format": "griffin-analysis-overlay-v1",
+  "addressModel": {
+    "key": "RVA",
+    "runtimeImageBase": "0x140000000",
+    "imageSize": "0x10000"
+  },
+  "image": {
+    "path": "boundary-test.bin",
+    "sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
+    "layout": "rva"
+  },
+  "summary": {
+    "ranges": [
+      {
+        "startRva": "0x8000",
+        "endRvaExclusive": "0x8071"
+      }
+    ]
+  },
+  "entries": [
+    {
+      "rva": "0x8001",
+      "length": 1,
+      "data": "90",
+      "analysisEligible": true,
+      "imageSha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd"
+    },
+    {
+      "rva": "0x8002",
+      "length": 2,
+      "data": "31c0",
+      "analysisEligible": true,
+      "imageSha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd"
+    }
+  ]
+}

@@ -342,11 +342,26 @@ void Decoder::initAllowedRangesWithConfig()
 
 	for (auto &p : _config->getConfig().parameters.selectedRanges)
 	{
-		_ranges.addPrimary(p);
-		LOG << "\t" << "[+] selected range @ " << p << std::endl;
+		AddressRange selectedRange = p;
+		if (_griffinOverlay)
+		{
+			if (auto bounds = _griffinOverlay->getExecutedBounds(
+					p.getStart(), p.getEnd());
+					bounds && bounds->first > p.getStart())
+			{
+				// Do not let a non-executed prefix choose a decoding that hides
+				// the first proved runtime boundary. The prefix remains unproved.
+				selectedRange.setStart(bounds->first);
+				LOG << "\t" << "Griffin overlay: non-executed prefix @ "
+						<< p.getStart() << " skipped; proved start @ "
+						<< bounds->first << std::endl;
+			}
+		}
+		_ranges.addPrimary(selectedRange);
+		LOG << "\t" << "[+] selected range @ " << selectedRange << std::endl;
 
 		if (auto* jt = _jumpTargets.push(
-				p.getStart(),
+				selectedRange.getStart(),
 				JumpTarget::eType::SELECTED_RANGE_START,
 				_c2l->getBasicMode(),
 				Address::Undefined))

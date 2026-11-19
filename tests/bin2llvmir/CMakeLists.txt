@@ -44,6 +44,7 @@ target_compile_definitions(tests-bin2llvmir
 		RETDEC_GRIFFIN_OVERLAY_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_test.json"
 		RETDEC_GRIFFIN_OVERLAY_WITNESS_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_witness_test.json"
 		RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json"
+		RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_boundaries_test.json"
 )
 
 target_link_libraries(tests-bin2llvmir
@@ -72,7 +73,8 @@ target_compile_definitions(tests-griffin PRIVATE
 	RETDEC_GRIFFIN_CFF_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_cff_test.json"
 	RETDEC_GRIFFIN_OVERLAY_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_test.json"
 	RETDEC_GRIFFIN_OVERLAY_WITNESS_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_witness_test.json"
-	RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json")
+	RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json"
+	RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_boundaries_test.json")
 target_link_libraries(tests-griffin
 	retdec::bin2llvmir
 	retdec::llvmir2hll

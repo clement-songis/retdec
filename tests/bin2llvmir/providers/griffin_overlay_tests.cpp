@@ -106,6 +106,23 @@ TEST_F(GriffinOverlayTests, overlappingDifferentBytesAreRejected)
 			std::runtime_error);
 }
 
+TEST_F(GriffinOverlayTests, nonExecutedPrefixYieldsToFirstProvenBoundary)
+{
+	auto overlay = GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST);
+	OverlayImageMock image;
+	auto bounds = overlay.getExecutedBounds(TraceBase + 0x8000, TraceBase + 0x8070);
+
+	ASSERT_TRUE(bounds);
+	EXPECT_EQ(TraceBase + 0x8001, bounds->first);
+	EXPECT_EQ(TraceBase + 0x8004, bounds->second);
+	EXPECT_FALSE(overlay.getRequiredEnd(0x8000));
+	EXPECT_EQ(2, overlay.applyTo(image, TraceBase));
+	EXPECT_EQ(0, image.writes.count(TraceBase + 0x8000));
+	EXPECT_EQ(bytes({0x90}), image.writes[TraceBase + 0x8001]);
+	EXPECT_EQ(std::vector<uint64_t>({TraceBase + 0x8001}),
+			overlay.getEntryStarts(TraceBase + 0x8000, TraceBase + 0x8002));
+}
+
 TEST_F(GriffinOverlayTests, rangeExtensionPreservesAlternativeDecoding)
 {
 	RangesToDecode ranges;

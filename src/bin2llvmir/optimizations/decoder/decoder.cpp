@@ -238,19 +238,29 @@ void Decoder::removeDecodedRange(
 
 	// `eb ff` jumps to its own second byte. Preserve that exact target and
 	// the rest of the range instead of consuming it with the first decoding.
-	std::vector<common::Address> targets;
+	std::set<common::Address> targets;
 	if (_griffin)
 	{
 		if (auto targetSet = _griffin->getControlTargetSet(start, "jmp"))
 		{
 			for (const auto& target : targetSet->targets)
 			{
-				targets.push_back(target.target);
+				targets.insert(target.target);
 			}
 		}
 		else if (auto target = _griffin->getControlTarget(start, "jmp"))
 		{
-			targets.push_back(*target);
+			targets.insert(*target);
+		}
+	}
+	if (_griffinOverlay)
+	{
+		// A static decoding may consume the first byte of an instruction that
+		// was actually executed. Re-queue every proved start it overlaps; the
+		// unproved prefix itself is never added to the overlay.
+		for (auto target : _griffinOverlay->getEntryStarts(start, end))
+		{
+			targets.insert(target);
 		}
 	}
 	auto* range = _ranges.getPrimary(start);

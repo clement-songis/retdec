@@ -149,6 +149,32 @@ GriffinOverlay GriffinOverlay::fromFile(const std::string& path)
 		throw std::runtime_error("Griffin overlay has no image base");
 	}
 
+	auto summary = root.FindMember("summary");
+	if (summary != root.MemberEnd() && summary->value.IsObject())
+	{
+		auto ranges = summary->value.FindMember("ranges");
+		if (ranges != summary->value.MemberEnd() && ranges->value.IsArray())
+		{
+			for (const auto& range : ranges->value.GetArray())
+			{
+				if (!range.IsObject())
+				{
+					throw std::runtime_error("Griffin overlay summary range is not an object");
+				}
+				uint64_t start = jsonAddress(
+						requiredMember(range, "startRva"), "summary.ranges[].startRva");
+				uint64_t end = jsonAddress(
+						requiredMember(range, "endRvaExclusive"),
+						"summary.ranges[].endRvaExclusive");
+				if (start >= end || end > result._imageSize)
+				{
+					throw std::runtime_error("invalid Griffin overlay summary range");
+				}
+				result._observedRanges.push_back({start, end});
+			}
+		}
+	}
+
 	auto& image = requiredMember(root, "image");
 	if (!image.IsObject())
 	{
@@ -293,6 +319,67 @@ std::optional<uint64_t> GriffinOverlay::getRequiredRangeEnd(
 		}
 	}
 	return result;
+}
+
+std::vector<uint64_t> GriffinOverlay::getEntryStarts(
+		uint64_t startAddress,
+		uint64_t endAddress) const
+{
+	std::vector<uint64_t> result;
+	for (auto base : _bases)
+	{
+		if (startAddress < base || startAddress - base >= _imageSize)
+		{
+			continue;
+		}
+		uint64_t startRva = startAddress - base;
+		uint64_t endRva = endAddress > base ? endAddress - base : 0;
+		for (auto it = _entries.lower_bound(startRva);
+				it != _entries.end() && it->first < endRva; ++it)
+		{
+			result.push_back(base + it->first);
+		}
+	}
+	return result;
+}
+
+std::optional<std::pair<uint64_t, uint64_t>> GriffinOverlay::getExecutedBounds(
+		uint64_t startAddress,
+		uint64_t endAddress) const
+{
+	for (auto base : _bases)
+	{
+		if (startAddress < base || startAddress - base >= _imageSize)
+		{
+			continue;
+		}
+		uint64_t startRva = startAddress - base;
+		uint64_t endRva = endAddress > base ? endAddress - base : 0;
+		for (const auto& range : _observedRanges)
+		{
+			if (startRva < range.startRva || startRva >= range.endRva)
+			{
+				continue;
+			}
+			// Selected ranges historically use an inclusive last-byte address,
+			// while the overlay summary uses an exclusive end. Accept both.
+			uint64_t effectiveEnd = endRva == range.endRva - 1
+					? range.endRva : std::min(endRva, range.endRva);
+			auto it = _entries.lower_bound(std::max(startRva, range.startRva));
+			if (it == _entries.end() || it->first >= effectiveEnd)
+			{
+				continue;
+			}
+			uint64_t first = it->first;
+			uint64_t lastEnd = first;
+			for (; it != _entries.end() && it->first < effectiveEnd; ++it)
+			{
+				lastEnd = std::max(lastEnd, it->first + it->second.data.size());
+			}
+			return std::make_pair(base + first, base + lastEnd);
+		}
+	}
+	return std::nullopt;
 }
 
 std::size_t GriffinOverlay::getEntryCount() const

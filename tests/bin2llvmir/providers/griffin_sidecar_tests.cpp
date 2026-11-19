@@ -753,6 +753,23 @@ class GriffinDecoderTests: public LlvmIrTests
 			decoder.removeDecodedRange(rejected, rejected + 1, false);
 			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(rejected));
 		}
+
+		void nonExecutedPrefixCannotConsumeProvenOverlayStart()
+		{
+			decoder._griffinOverlay = std::make_unique<GriffinOverlay>(
+					GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST));
+			auto prefix = TraceBase + 0x8000;
+			auto end = TraceBase + 0x8004;
+			decoder._ranges.addPrimary(prefix, end);
+
+			decoder.removeDecodedRange(prefix, prefix + 2, false);
+
+			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(prefix));
+			auto* proved = decoder._ranges.getPrimary(TraceBase + 0x8001);
+			ASSERT_NE(nullptr, proved);
+			EXPECT_EQ(TraceBase + 0x8001, proved->getStart());
+			EXPECT_EQ(end, proved->getEnd());
+		}
 };
 
 class GriffinCffDecoderTests: public LlvmIrTests
@@ -1334,6 +1351,11 @@ TEST_F(GriffinDecoderTests, overlappingJumpTargetIsAllowed)
 TEST_F(GriffinDecoderTests, overlappedTargetRangeSurvivesAndRejectedRetDoesNot)
 {
 	overlappedTargetRangeSurvivesAndRejectedRetDoesNot();
+}
+
+TEST_F(GriffinDecoderTests, nonExecutedPrefixCannotConsumeProvenOverlayStart)
+{
+	nonExecutedPrefixCannotConsumeProvenOverlayStart();
 }
 
 } // namespace tests

@@ -216,7 +216,7 @@ TEST_F(GriffinSidecarStackTests, rejectsIncompleteTaintedAndMismatchedContexts)
 	}
 }
 
-TEST_F(GriffinSidecarStackTests, realObservationsRemainUnknownWithoutRoleProof)
+TEST_F(GriffinSidecarStackTests, realObservationsAcceptOnlyTheProvedSpill)
 {
 	const char* path = std::getenv("RETDEC_GRIFFIN_REAL_STACK_SIDECAR");
 	if (path == nullptr)
@@ -225,12 +225,19 @@ TEST_F(GriffinSidecarStackTests, realObservationsRemainUnknownWithoutRoleProof)
 	}
 	auto sidecar = GriffinSidecar::fromFile(path);
 
-	EXPECT_GT(sidecar.getStackSlotCount(), 0);
+	EXPECT_EQ(41, sidecar.getStackSlotCount());
 	EXPECT_EQ(0, sidecar.getAbiFrameStackSlotCount());
-	auto slot = sidecar.getStackSlot(TraceBase + 0xc1c13b);
-	ASSERT_TRUE(slot);
-	EXPECT_EQ(0x70, slot->displacement);
-	EXPECT_EQ(GriffinSidecar::StackSlotRole::Unknown, slot->role);
+	auto unknown = sidecar.getStackSlot(TraceBase + 0xc1c13b);
+	ASSERT_TRUE(unknown);
+	EXPECT_EQ(0x70, unknown->displacement);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::Unknown, unknown->role);
+
+	auto spill = sidecar.getStackSlot(TraceBase + 0xf7daed);
+	ASSERT_TRUE(spill);
+	EXPECT_EQ(0x180, spill->displacement);
+	EXPECT_EQ(0x2fffeb40, spill->address);
+	EXPECT_EQ(8, spill->size);
+	EXPECT_EQ(GriffinSidecar::StackSlotRole::VmSpill, spill->role);
 }
 
 class GriffinSidecarCffTests: public LlvmIrTests
@@ -773,19 +780,30 @@ class GriffinDecoderTests: public LlvmIrTests
 
 		void staticOnlyTailRejectsStaleDecodeTarget()
 		{
+			parseInput(R"(
+				define void @fnc() {
+				entry:
+					ret void
+				}
+			)");
+			prepareV2Decoder();
+			JumpTarget::config = v2Config.get();
 			decoder._griffinOverlay = std::make_unique<GriffinOverlay>(
 					GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST));
 			auto tail = TraceBase + 0x8004;
+			ASSERT_TRUE(decoder._griffinOverlay->isNonExecuted(tail));
 			decoder._ranges.addPrimary(tail, TraceBase + 0x8071);
 			JumpTarget target(
 					tail,
 					JumpTarget::eType::LEFTOVER,
 					CS_MODE_LITTLE_ENDIAN,
-					Address::Undefined);
+					common::Address::Undefined);
+			ASSERT_EQ(tail, target.getAddress());
 
 			decoder.decodeJumpTarget(target);
 
 			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(tail));
+			JumpTarget::config = nullptr;
 		}
 };
 
@@ -930,6 +948,42 @@ class GriffinStackAnalysisTests: public LlvmIrTests
 				});
 			});
 		}
+
+		LoadInst* reconstructedLoad()
+		{
+			for (auto& bb : *getFunctionByName("fnc"))
+			{
+				for (auto& inst : bb)
+				{
+					if (auto* load = dyn_cast<LoadInst>(&inst))
+					{
+						if (isa<AllocaInst>(load->getPointerOperand()))
+						{
+							return load;
+						}
+					}
+				}
+			}
+			return nullptr;
+		}
+
+		StoreInst* reconstructedStore()
+		{
+			for (auto& bb : *getFunctionByName("fnc"))
+			{
+				for (auto& inst : bb)
+				{
+					if (auto* store = dyn_cast<StoreInst>(&inst))
+					{
+						if (isa<AllocaInst>(store->getPointerOperand()))
+						{
+							return store;
+						}
+					}
+				}
+			}
+			return nullptr;
+		}
 };
 
 TEST_F(GriffinStackAnalysisTests, onlyExplicitAbiRoleRebuildsFrame)
@@ -959,7 +1013,7 @@ TEST_F(GriffinStackAnalysisTests, volatileLoadAndStorePreserveEffects)
 	runAt(0x1000, 0x20, true,
 			"%value = load volatile i64, i64* %pointer, align 16");
 	ASSERT_TRUE(reconstructedFrame());
-	auto* load = getNthInstruction<LoadInst>(1);
+	auto* load = reconstructedLoad();
 	ASSERT_NE(nullptr, load);
 	EXPECT_TRUE(load->isVolatile());
 	EXPECT_EQ(16, load->getAlignment());
@@ -968,7 +1022,7 @@ TEST_F(GriffinStackAnalysisTests, volatileLoadAndStorePreserveEffects)
 	runAt(0x1000, 0x20, true,
 			"store volatile i64 7, i64* %pointer, align 16");
 	ASSERT_TRUE(reconstructedFrame());
-	auto* store = getNthInstruction<StoreInst>(1);
+	auto* store = reconstructedStore();
 	ASSERT_NE(nullptr, store);
 	EXPECT_TRUE(store->isVolatile());
 	EXPECT_EQ(16, store->getAlignment());
@@ -982,22 +1036,22 @@ TEST_F(GriffinStackAnalysisTests, atomicLoadAndStorePreserveOrderingAndSyncScope
 			"%value = load atomic i64, i64* %pointer "
 			"syncscope(\"singlethread\") acquire, align 8");
 	ASSERT_TRUE(reconstructedFrame());
-	auto* load = getNthInstruction<LoadInst>(1);
+	auto* load = reconstructedLoad();
 	ASSERT_NE(nullptr, load);
 	EXPECT_TRUE(load->isAtomic());
 	EXPECT_EQ(AtomicOrdering::Acquire, load->getOrdering());
-	EXPECT_EQ(SyncScope::SingleThread, load->getSyncScope());
+	EXPECT_EQ(SyncScope::SingleThread, load->getSyncScopeID());
 	EXPECT_EQ(8, load->getAlignment());
 
 	runAt(0x1000, 0x20, true,
 			"store atomic i64 7, i64* %pointer "
 			"syncscope(\"singlethread\") release, align 8");
 	ASSERT_TRUE(reconstructedFrame());
-	auto* store = getNthInstruction<StoreInst>(1);
+	auto* store = reconstructedStore();
 	ASSERT_NE(nullptr, store);
 	EXPECT_TRUE(store->isAtomic());
 	EXPECT_EQ(AtomicOrdering::Release, store->getOrdering());
-	EXPECT_EQ(SyncScope::SingleThread, store->getSyncScope());
+	EXPECT_EQ(SyncScope::SingleThread, store->getSyncScopeID());
 	EXPECT_EQ(8, store->getAlignment());
 	EXPECT_FALSE(verifyModule(*module, &errs()));
 }
@@ -1006,7 +1060,7 @@ TEST_F(GriffinStackAnalysisTests, ordinaryLoadAndStoreRemainOrdinary)
 {
 	runAt(0x1000, 0x20, true, "%value = load i64, i64* %pointer");
 	ASSERT_TRUE(reconstructedFrame());
-	auto* load = getNthInstruction<LoadInst>(1);
+	auto* load = reconstructedLoad();
 	ASSERT_NE(nullptr, load);
 	EXPECT_FALSE(load->isVolatile());
 	EXPECT_FALSE(load->isAtomic());
@@ -1014,7 +1068,7 @@ TEST_F(GriffinStackAnalysisTests, ordinaryLoadAndStoreRemainOrdinary)
 
 	runAt(0x1000);
 	ASSERT_TRUE(reconstructedFrame());
-	auto* store = getNthInstruction<StoreInst>(1);
+	auto* store = reconstructedStore();
 	ASSERT_NE(nullptr, store);
 	EXPECT_FALSE(store->isVolatile());
 	EXPECT_FALSE(store->isAtomic());

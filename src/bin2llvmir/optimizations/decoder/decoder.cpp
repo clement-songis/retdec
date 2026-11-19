@@ -816,9 +816,19 @@ bool Decoder::transformToGriffinControlFlowSet(
 	auto* controlValue = pseudo->getArgOperand(0);
 	if (targetSet.stateFromPseudoArgument)
 	{
-		if (!controlValue->getType()->isIntegerTy())
+		auto* stateType = llvm::dyn_cast<llvm::IntegerType>(controlValue->getType());
+		if (stateType == nullptr)
 		{
 			return false;
+		}
+		for (const auto& flowTarget : targetSet.targets)
+		{
+			if (!flowTarget.stateValue
+					|| !llvm::ConstantInt::isValueValidForType(
+							stateType, *flowTarget.stateValue))
+			{
+				return false;
+			}
 		}
 	}
 	else if (!controlValue->getType()->isIntegerTy()

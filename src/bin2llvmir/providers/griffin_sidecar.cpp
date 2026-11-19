@@ -534,6 +534,10 @@ GriffinSidecar GriffinSidecar::fromFile(const std::string& path)
 					&& targetsIt != site.MemberEnd()
 					&& targetsIt->value.IsArray()
 					&& targetsIt->value.Size() == 1
+					&& (kind != "jmp" || classification != "dynamic-verified"
+							|| (boolMemberIs(site, "targetSetComplete", true)
+									&& !site.HasMember("targetCases")
+									&& !site.HasMember("stateOperand")))
 					&& observationIdsIt != site.MemberEnd()
 					&& observationIdsIt->value.IsArray()
 					&& observationIdsIt->value.Size() != 0)

@@ -359,6 +359,634 @@
         "tainted": false,
         "unknown": false
       }
+    },
+    {
+      "observationId": "ambiguousa",
+      "run": "fixture",
+      "sourceRva": "0x7020",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "ambiguous",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "ambiguousb",
+      "run": "fixture",
+      "sourceRva": "0x7020",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "ambiguous",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "scratcha",
+      "run": "fixture",
+      "sourceRva": "0x7030",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": true,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "scratchb",
+      "run": "fixture",
+      "sourceRva": "0x7030",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": true,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "incomplete-contexta",
+      "run": "fixture",
+      "sourceRva": "0x7040",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": false,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "incomplete-contextb",
+      "run": "fixture",
+      "sourceRva": "0x7040",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": false,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "state-mismatcha",
+      "run": "fixture",
+      "sourceRva": "0x9010",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x8"
+    },
+    {
+      "observationId": "state-mismatchb",
+      "run": "fixture",
+      "sourceRva": "0x9010",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "duplicate-statea",
+      "run": "fixture",
+      "sourceRva": "0x9020",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "duplicate-stateb",
+      "run": "fixture",
+      "sourceRva": "0x9020",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "duplicate-targeta",
+      "run": "fixture",
+      "sourceRva": "0x9030",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "duplicate-targetb",
+      "run": "fixture",
+      "sourceRva": "0x9030",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "extra-casea",
+      "run": "fixture",
+      "sourceRva": "0x9040",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "extra-caseb",
+      "run": "fixture",
+      "sourceRva": "0x9040",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "wrong-state-operanda",
+      "run": "fixture",
+      "sourceRva": "0x9050",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "wrong-state-operandb",
+      "run": "fixture",
+      "sourceRva": "0x9050",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "missing-casea",
+      "run": "fixture",
+      "sourceRva": "0x9060",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
+    },
+    {
+      "observationId": "missing-caseb",
+      "run": "fixture",
+      "sourceRva": "0x9060",
+      "targetRva": "0x4000",
+      "targetVa": "0x140004000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x4000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0xb"
+    },
+    {
+      "observationId": "single-incomplete",
+      "run": "fixture",
+      "sourceRva": "0xa000",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      }
+    },
+    {
+      "observationId": "single-complete",
+      "run": "fixture",
+      "sourceRva": "0xa010",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      }
+    },
+    {
+      "observationId": "single-state",
+      "run": "fixture",
+      "sourceRva": "0xa020",
+      "targetRva": "0x3000",
+      "targetVa": "0x140003000",
+      "mnemonic": "jmp",
+      "text": "jmp rax",
+      "rsp": "0x7000000000",
+      "runtimeImageBase": "0x140000000",
+      "imageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "classification": "dynamic-verified",
+      "context": {
+        "capture": "pre-instruction",
+        "complete": true,
+        "registers": {
+          "rsp": "0x7000000000"
+        },
+        "memory": []
+      },
+      "replay": {
+        "status": "match",
+        "actualTargetRva": "0x3000"
+      },
+      "scratch-taint": {
+        "tainted": false,
+        "unknown": false
+      },
+      "stateValue": "0x7"
     }
   ],
   "controlFlowSites": [
@@ -468,6 +1096,265 @@
       "observationIds": [
         "orphan-statea",
         "orphan-stateb"
+      ]
+    },
+    {
+      "siteRva": "0x7020",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "ambiguous",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "ambiguousa",
+        "ambiguousb"
+      ]
+    },
+    {
+      "siteRva": "0x7030",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "scratcha",
+        "scratchb"
+      ]
+    },
+    {
+      "siteRva": "0x7040",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "incomplete-contexta",
+        "incomplete-contextb"
+      ]
+    },
+    {
+      "siteRva": "0x9010",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "state-mismatcha",
+        "state-mismatchb"
+      ],
+      "stateOperand": "pseudo-arg",
+      "targetCases": [
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0x7"
+        },
+        {
+          "targetRva": "0x4000",
+          "stateValue": "0xb"
+        }
+      ]
+    },
+    {
+      "siteRva": "0x9020",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "duplicate-statea",
+        "duplicate-stateb"
+      ],
+      "stateOperand": "pseudo-arg",
+      "targetCases": [
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0x7"
+        },
+        {
+          "targetRva": "0x4000",
+          "stateValue": "0x7"
+        }
+      ]
+    },
+    {
+      "siteRva": "0x9030",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "duplicate-targeta",
+        "duplicate-targetb"
+      ],
+      "stateOperand": "pseudo-arg",
+      "targetCases": [
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0x7"
+        },
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0xb"
+        }
+      ]
+    },
+    {
+      "siteRva": "0x9040",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "extra-casea",
+        "extra-caseb"
+      ],
+      "stateOperand": "pseudo-arg",
+      "targetCases": [
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0x7"
+        },
+        {
+          "targetRva": "0x4000",
+          "stateValue": "0xb"
+        },
+        {
+          "targetRva": "0x5000",
+          "stateValue": "0xd"
+        }
+      ]
+    },
+    {
+      "siteRva": "0x9050",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "wrong-state-operanda",
+        "wrong-state-operandb"
+      ],
+      "stateOperand": "register",
+      "targetCases": [
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0x7"
+        },
+        {
+          "targetRva": "0x4000",
+          "stateValue": "0xb"
+        }
+      ]
+    },
+    {
+      "siteRva": "0x9060",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": null,
+      "targets": [
+        "0x3000",
+        "0x4000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "missing-casea",
+        "missing-caseb"
+      ],
+      "stateOperand": "pseudo-arg",
+      "targetCases": [
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0x7"
+        }
+      ]
+    },
+    {
+      "siteRva": "0xa000",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": "0x3000",
+      "targets": [
+        "0x3000"
+      ],
+      "targetSetComplete": false,
+      "observationIds": [
+        "single-incomplete"
+      ]
+    },
+    {
+      "siteRva": "0xa010",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": "0x3000",
+      "targets": [
+        "0x3000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "single-complete"
+      ]
+    },
+    {
+      "siteRva": "0xa020",
+      "kind": "jmp",
+      "providerEligible": true,
+      "classification": "dynamic-verified",
+      "targetRva": "0x3000",
+      "targets": [
+        "0x3000"
+      ],
+      "targetSetComplete": true,
+      "observationIds": [
+        "single-state"
+      ],
+      "stateOperand": "pseudo-arg",
+      "targetCases": [
+        {
+          "targetRva": "0x3000",
+          "stateValue": "0x7"
+        }
       ]
     }
   ]

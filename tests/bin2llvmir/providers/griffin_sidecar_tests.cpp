@@ -805,6 +805,20 @@ class GriffinDecoderTests: public LlvmIrTests
 			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(tail));
 			JumpTarget::config = nullptr;
 		}
+
+		void provedStartConsumesRangeWithoutRequeueingInteriorEntries()
+		{
+			decoder._griffinOverlay = std::make_unique<GriffinOverlay>(
+					GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST));
+			auto start = TraceBase + 0x8001;
+			decoder._ranges.addPrimary(start, TraceBase + 0x8004);
+
+			decoder.removeDecodedRange(start, TraceBase + 0x8004, false);
+
+			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(start));
+			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(TraceBase + 0x8002));
+			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(TraceBase + 0x8003));
+		}
 };
 
 class GriffinCffDecoderTests: public LlvmIrTests
@@ -1539,6 +1553,11 @@ TEST_F(GriffinDecoderTests, nonExecutedPrefixCannotConsumeProvenOverlayStart)
 TEST_F(GriffinDecoderTests, staticOnlyTailRejectsStaleDecodeTarget)
 {
 	staticOnlyTailRejectsStaleDecodeTarget();
+}
+
+TEST_F(GriffinDecoderTests, provedStartConsumesRangeWithoutRequeueingInteriorEntries)
+{
+	provedStartConsumesRangeWithoutRequeueingInteriorEntries();
 }
 
 } // namespace tests

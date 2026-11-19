@@ -38,6 +38,7 @@ class GriffinOverlay
 		std::vector<uint64_t> getEntryStarts(
 				uint64_t startAddress,
 				uint64_t endAddress) const;
+		bool isEntryStart(uint64_t address) const;
 		bool isNonExecuted(uint64_t address) const;
 		std::size_t getNonExecutedBoundaryByteCount() const;
 

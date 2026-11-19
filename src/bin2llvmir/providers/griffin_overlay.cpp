@@ -367,6 +367,18 @@ std::vector<uint64_t> GriffinOverlay::getEntryStarts(
 	return result;
 }
 
+bool GriffinOverlay::isEntryStart(uint64_t address) const
+{
+	for (auto base : _bases)
+	{
+		if (address >= base && address - base < _imageSize)
+		{
+			return _entries.count(address - base) != 0;
+		}
+	}
+	return false;
+}
+
 std::optional<std::pair<uint64_t, uint64_t>> GriffinOverlay::getExecutedBounds(
 		uint64_t startAddress,
 		uint64_t endAddress) const

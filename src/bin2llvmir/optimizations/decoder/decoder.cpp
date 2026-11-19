@@ -255,11 +255,11 @@ void Decoder::removeDecodedRange(
 			targets.insert(*target);
 		}
 	}
-	if (_griffinOverlay)
+	if (_griffinOverlay && !_griffinOverlay->isEntryStart(start))
 	{
-		// A static decoding may consume the first byte of an instruction that
-		// was actually executed. Re-queue every proved start it overlaps; the
-		// unproved prefix itself is never added to the overlay.
+		// Only an unproved static start may rescue a proved boundary it hides.
+		// Re-queueing overlapped entries after decoding an already proved start
+		// repeatedly restores consumed ranges and causes quadratic re-decoding.
 		for (auto target : _griffinOverlay->getEntryStarts(start, end))
 		{
 			targets.insert(target);

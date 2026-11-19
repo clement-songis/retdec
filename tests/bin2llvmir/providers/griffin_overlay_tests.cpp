@@ -116,6 +116,10 @@ TEST_F(GriffinOverlayTests, nonExecutedPrefixYieldsToFirstProvenBoundary)
 	EXPECT_EQ(TraceBase + 0x8001, bounds->first);
 	EXPECT_EQ(TraceBase + 0x8004, bounds->second);
 	EXPECT_FALSE(overlay.getRequiredEnd(0x8000));
+	EXPECT_FALSE(overlay.isEntryStart(TraceBase + 0x8000));
+	EXPECT_TRUE(overlay.isEntryStart(TraceBase + 0x8001));
+	EXPECT_TRUE(overlay.isEntryStart(TraceBase + 0x8002));
+	EXPECT_FALSE(overlay.isEntryStart(TraceBase + 0x8003));
 	EXPECT_EQ(2, overlay.applyTo(image, TraceBase));
 	EXPECT_EQ(0, image.writes.count(TraceBase + 0x8000));
 	EXPECT_EQ(bytes({0x90}), image.writes[TraceBase + 0x8001]);

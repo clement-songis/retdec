@@ -866,7 +866,12 @@ class GriffinStackAnalysisTests: public LlvmIrTests
 	protected:
 		std::unique_ptr<Config> config;
 
-		void runAt(uint64_t rva, int displacement = 0x20, bool withMapping = true)
+		void runAt(
+				uint64_t rva,
+				int displacement = 0x20,
+				bool withMapping = true,
+				const std::string& memoryOperation =
+						"store i64 7, i64* %pointer")
 		{
 			clearAllStaticData();
 			std::string ir = R"(
@@ -878,13 +883,16 @@ class GriffinStackAnalysisTests: public LlvmIrTests
 					%sp = load i64, i64* @rsp
 					%address = add i64 %sp, DISPLACEMENT
 					%pointer = inttoptr i64 %address to i64*
-					store i64 7, i64* %pointer
+					MEMORY_OPERATION
 					ret void
 				}
 			)";
 			auto displacementPos = ir.find("DISPLACEMENT");
 			ir.replace(displacementPos, std::string("DISPLACEMENT").size(),
 					std::to_string(displacement));
+			auto memoryOperationPos = ir.find("MEMORY_OPERATION");
+			ir.replace(memoryOperationPos, std::string("MEMORY_OPERATION").size(),
+					memoryOperation);
 			parseInput(ir);
 			auto* marker = getGlobalByName("llvm2asm");
 			if (withMapping)
@@ -944,6 +952,105 @@ TEST_F(GriffinStackAnalysisTests, abiRoleRequiresMatchingDisplacementAndAsmConte
 
 	runAt(0x1000, 0x20, false);
 	EXPECT_FALSE(reconstructedFrame());
+}
+
+TEST_F(GriffinStackAnalysisTests, volatileLoadAndStorePreserveEffects)
+{
+	runAt(0x1000, 0x20, true,
+			"%value = load volatile i64, i64* %pointer, align 16");
+	ASSERT_TRUE(reconstructedFrame());
+	auto* load = getNthInstruction<LoadInst>(1);
+	ASSERT_NE(nullptr, load);
+	EXPECT_TRUE(load->isVolatile());
+	EXPECT_EQ(16, load->getAlignment());
+	EXPECT_TRUE(isa<AllocaInst>(load->getPointerOperand()));
+
+	runAt(0x1000, 0x20, true,
+			"store volatile i64 7, i64* %pointer, align 16");
+	ASSERT_TRUE(reconstructedFrame());
+	auto* store = getNthInstruction<StoreInst>(1);
+	ASSERT_NE(nullptr, store);
+	EXPECT_TRUE(store->isVolatile());
+	EXPECT_EQ(16, store->getAlignment());
+	EXPECT_TRUE(isa<AllocaInst>(store->getPointerOperand()));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinStackAnalysisTests, atomicLoadAndStorePreserveOrderingAndSyncScope)
+{
+	runAt(0x1000, 0x20, true,
+			"%value = load atomic i64, i64* %pointer "
+			"syncscope(\"singlethread\") acquire, align 8");
+	ASSERT_TRUE(reconstructedFrame());
+	auto* load = getNthInstruction<LoadInst>(1);
+	ASSERT_NE(nullptr, load);
+	EXPECT_TRUE(load->isAtomic());
+	EXPECT_EQ(AtomicOrdering::Acquire, load->getOrdering());
+	EXPECT_EQ(SyncScope::SingleThread, load->getSyncScope());
+	EXPECT_EQ(8, load->getAlignment());
+
+	runAt(0x1000, 0x20, true,
+			"store atomic i64 7, i64* %pointer "
+			"syncscope(\"singlethread\") release, align 8");
+	ASSERT_TRUE(reconstructedFrame());
+	auto* store = getNthInstruction<StoreInst>(1);
+	ASSERT_NE(nullptr, store);
+	EXPECT_TRUE(store->isAtomic());
+	EXPECT_EQ(AtomicOrdering::Release, store->getOrdering());
+	EXPECT_EQ(SyncScope::SingleThread, store->getSyncScope());
+	EXPECT_EQ(8, store->getAlignment());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinStackAnalysisTests, ordinaryLoadAndStoreRemainOrdinary)
+{
+	runAt(0x1000, 0x20, true, "%value = load i64, i64* %pointer");
+	ASSERT_TRUE(reconstructedFrame());
+	auto* load = getNthInstruction<LoadInst>(1);
+	ASSERT_NE(nullptr, load);
+	EXPECT_FALSE(load->isVolatile());
+	EXPECT_FALSE(load->isAtomic());
+	EXPECT_TRUE(isa<AllocaInst>(load->getPointerOperand()));
+
+	runAt(0x1000);
+	ASSERT_TRUE(reconstructedFrame());
+	auto* store = getNthInstruction<StoreInst>(1);
+	ASSERT_NE(nullptr, store);
+	EXPECT_FALSE(store->isVolatile());
+	EXPECT_FALSE(store->isAtomic());
+	EXPECT_TRUE(isa<AllocaInst>(store->getPointerOperand()));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinStackAnalysisTests, volatileAndAtomicVmAndUnknownAccessesStayOpaque)
+{
+	for (uint64_t rva : {0x1010, 0x1030})
+	{
+		int displacement = rva == 0x1010 ? 0x28 : 0x38;
+
+		runAt(rva, displacement, true,
+				"%value = load volatile i64, i64* %pointer");
+		EXPECT_FALSE(reconstructedFrame()) << std::hex << rva;
+		EXPECT_TRUE(getNthInstruction<LoadInst>(1)->isVolatile());
+
+		runAt(rva, displacement, true,
+				"store volatile i64 7, i64* %pointer");
+		EXPECT_FALSE(reconstructedFrame()) << std::hex << rva;
+		EXPECT_TRUE(getNthInstruction<StoreInst>(1)->isVolatile());
+
+		runAt(rva, displacement, true,
+				"%value = load atomic i64, i64* %pointer acquire, align 8");
+		EXPECT_FALSE(reconstructedFrame()) << std::hex << rva;
+		auto* load = getNthInstruction<LoadInst>(1);
+		EXPECT_EQ(AtomicOrdering::Acquire, load->getOrdering());
+
+		runAt(rva, displacement, true,
+				"store atomic i64 7, i64* %pointer release, align 8");
+		EXPECT_FALSE(reconstructedFrame()) << std::hex << rva;
+		auto* store = getNthInstruction<StoreInst>(1);
+		EXPECT_EQ(AtomicOrdering::Release, store->getOrdering());
+	}
+	EXPECT_FALSE(verifyModule(*module, &errs()));
 }
 
 TEST_F(GriffinCffDecoderTests, provedStateSetBecomesSwitch)

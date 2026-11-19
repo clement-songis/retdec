@@ -167,10 +167,29 @@ bool canMergeLoads(llvm::LoadInst* l1, llvm::LoadInst* l2)
 		return false;
 	}
 
-	auto* first = l1->comesBefore(l2) ? l1 : l2;
-	auto* second = first == l1 ? l2 : l1;
-	for (auto* between = first->getNextNode();
-			between != second;
+	llvm::LoadInst* first = nullptr;
+	llvm::LoadInst* second = nullptr;
+	for (auto& insn : *l1->getParent())
+	{
+		if (&insn == l1)
+		{
+			first = l1;
+			second = l2;
+			break;
+		}
+		if (&insn == l2)
+		{
+			first = l2;
+			second = l1;
+			break;
+		}
+	}
+	if (first == nullptr)
+	{
+		return false;
+	}
+	auto* between = first->getNextNode();
+	for (; between != nullptr && between != second;
 			between = between->getNextNode())
 	{
 		if (between->mayWriteToMemory()
@@ -187,7 +206,7 @@ bool canMergeLoads(llvm::LoadInst* l1, llvm::LoadInst* l2)
 			}
 		}
 	}
-	return true;
+	return between == second;
 }
 
 } // namespace

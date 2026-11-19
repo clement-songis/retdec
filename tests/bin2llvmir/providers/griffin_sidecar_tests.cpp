@@ -226,7 +226,7 @@ TEST_F(GriffinSidecarCffTests, realObservedSetsStayRejectedWithoutCompletenessPr
 			sidecar.getControlStatus(TraceBase + 0x2a5377, "ret"));
 }
 
-TEST_F(GriffinSidecarV2Tests, witnessPromotesStaticAndDynamicVerifiedOnly)
+TEST_F(GriffinSidecarV2Tests, witnessSeparatesTransferProofFromSetCompleteness)
 {
 	const char* path = std::getenv("RETDEC_GRIFFIN_V2_WITNESS");
 	if (path == nullptr)
@@ -239,27 +239,26 @@ TEST_F(GriffinSidecarV2Tests, witnessPromotesStaticAndDynamicVerifiedOnly)
 	EXPECT_TRUE(sidecar.checkImageSha256(
 			"c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390"));
 	EXPECT_FALSE(sidecar.checkImageSha256(std::string(64, '0')));
-	EXPECT_EQ(5, sidecar.getControlTargetCount());
-	EXPECT_EQ(1, sidecar.getDynamicVerifiedTargetCount());
+	EXPECT_EQ(4, sidecar.getControlTargetCount());
+	EXPECT_EQ(0, sidecar.getDynamicVerifiedTargetCount());
 	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
 	EXPECT_EQ(TraceBase + 0x2a9881,
 			*sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
-	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x58df90, "jmp"));
-	EXPECT_EQ(TraceBase + 0x27cee7,
-			*sidecar.getControlTarget(TraceBase + 0x58df90, "jmp"));
+	// The dynamic transfer is replayed, but its target set is not complete.
+	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0x58df90, "jmp"));
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0x569140, "ret"));
 	EXPECT_FALSE(sidecar.getRetTrampolineTarget(TraceBase + 0x569140));
 	EXPECT_EQ(1, sidecar.getUnresolvedRetCount());
 	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
 			sidecar.getControlStatus(TraceBase + 0x463ade, "call"));
-	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
 			sidecar.getControlStatus(TraceBase + 0x58df90, "jmp"));
 	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
 			sidecar.getControlStatus(TraceBase + 0x569140, "ret"));
 	ASSERT_TRUE(sidecar.getControlTarget(RuntimeBase + 0x463ade, "call"));
 	EXPECT_EQ(RuntimeBase + 0x2a9881,
 			*sidecar.getControlTarget(RuntimeBase + 0x463ade, "call"));
-	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
 			sidecar.getControlStatus(RuntimeBase + 0x58df90, "jmp"));
 }
 

@@ -4,6 +4,8 @@
 * @copyright (c) 2017 Avast Software, licensed under the MIT license
 */
 
+#include <stdexcept>
+
 #include "bin2llvmir/utils/llvmir_tests.h"
 #include "retdec/bin2llvmir/optimizations/inst_opt/inst_opt.h"
 
@@ -21,6 +23,40 @@ class OptimizeTests: public LlvmIrTests
 {
 
 };
+
+namespace
+{
+
+bool evaluateI1(llvm::Value* value, bool x, bool y)
+{
+	if (auto* c = llvm::dyn_cast<llvm::ConstantInt>(value))
+	{
+		return !c->isZero();
+	}
+	if (auto* a = llvm::dyn_cast<llvm::Argument>(value))
+	{
+		if (a->getName() == "x") return x;
+		if (a->getName() == "y") return y;
+	}
+	if (auto* b = llvm::dyn_cast<llvm::BinaryOperator>(value))
+	{
+		if (b->getOpcode() == llvm::Instruction::And)
+		{
+			return evaluateI1(b->getOperand(0), x, y)
+					&& evaluateI1(b->getOperand(1), x, y);
+		}
+	}
+	if (auto* c = llvm::dyn_cast<llvm::ICmpInst>(value))
+	{
+		bool lhs = evaluateI1(c->getOperand(0), x, y);
+		bool rhs = evaluateI1(c->getOperand(1), x, y);
+		if (c->getPredicate() == llvm::ICmpInst::ICMP_EQ) return lhs == rhs;
+		if (c->getPredicate() == llvm::ICmpInst::ICMP_NE) return lhs != rhs;
+	}
+	throw std::runtime_error("unsupported i1 expression in test evaluator");
+}
+
+} // namespace
 
 //
 // no optimization
@@ -380,7 +416,7 @@ TEST_F(OptimizeTests, xor_i1_xy)
 // and i1 X, Y
 //
 
-TEST_F(OptimizeTests, and_i1_xy)
+TEST_F(OptimizeTests, andI1NonconstantOperandsAreNotRewritten)
 {
 	parseInput(R"(
 		@reg = global i1 1
@@ -398,12 +434,41 @@ TEST_F(OptimizeTests, and_i1_xy)
 		@reg = global i1 1
 		define i1 @fnc() {
 			%a = load i1, i1* @reg
-			%b = icmp eq i1 %a, 1
+			%b = and i1 %a, 1
 			ret i1 %b
 		}
 	)";
 	checkModuleAgainstExpectedIr(exp);
-	EXPECT_TRUE(ret);
+	EXPECT_FALSE(ret);
+}
+
+TEST_F(OptimizeTests, andI1ExhaustiveTruthTable)
+{
+	parseInput(R"(
+		define i1 @fnc(i1 %x, i1 %y) {
+			%r = and i1 %x, %y
+			ret i1 %r
+		}
+	)");
+	auto* i = getInstructionByName("r");
+
+	bool ret = inst_opt::optimize(i);
+
+	EXPECT_FALSE(ret);
+	for (bool x : {false, true})
+	for (bool y : {false, true})
+	{
+		EXPECT_EQ(x && y, evaluateI1(i, x, y))
+			<< "x=" << x << ", y=" << y;
+	}
+
+	std::string exp = R"(
+		define i1 @fnc(i1 %x, i1 %y) {
+			%r = and i1 %x, %y
+			ret i1 %r
+		}
+	)";
+	checkModuleAgainstExpectedIr(exp);
 }
 
 //

@@ -283,19 +283,32 @@ TEST_F(GriffinSidecarV2Tests, migrationDoesNotPromoteHistoricalDynamicEdges)
 	EXPECT_EQ(25, sidecar.getUnresolvedRetCount());
 }
 
-TEST_F(GriffinSidecarV2Tests, rejectsScratchAmbiguousMultiTargetAndBadReplay)
+TEST_F(GriffinSidecarV2Tests, rejectsIncompleteSingletonScratchAmbiguousMultiTargetAndBadReplay)
 {
 	auto sidecar = GriffinSidecar::fromFile(RETDEC_GRIFFIN_V2_TEST_SIDECAR);
 
 	EXPECT_TRUE(sidecar.checkImageSha256(
 			"c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390"));
 	EXPECT_FALSE(sidecar.checkImageSha256(std::string(64, '0')));
-	EXPECT_EQ(3, sidecar.getControlTargetCount());
-	EXPECT_EQ(1, sidecar.getDynamicVerifiedTargetCount());
+	EXPECT_EQ(2, sidecar.getControlTargetCount());
+	EXPECT_EQ(0, sidecar.getDynamicVerifiedTargetCount());
 	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
 	EXPECT_EQ(TraceBase + 0x2a9881,
 			*sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
+	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x58df7f, "jmp"));
+	EXPECT_EQ(TraceBase + 0x58df80,
+			*sidecar.getControlTarget(TraceBase + 0x58df7f, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+			sidecar.getControlStatus(TraceBase + 0x463ade, "call"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Proven,
+			sidecar.getControlStatus(TraceBase + 0x58df7f, "jmp"));
+	// Dynamic singleton replay alone is insufficient without set completeness.
+	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0x58df90, "jmp"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0x58df90, "jmp"));
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0x569140, "ret"));
+	EXPECT_EQ(GriffinSidecar::ControlStatus::Rejected,
+			sidecar.getControlStatus(TraceBase + 0x569140, "ret"));
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xbeef, "jmp"));
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xcafe, "jmp"));
 	EXPECT_FALSE(sidecar.getControlTarget(TraceBase + 0xdead, "jmp"));

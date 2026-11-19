@@ -885,7 +885,7 @@ bool Decoder::transformToGriffinControlFlowSet(
 			}
 		}
 		uint64_t caseValue = targetSet.stateFromPseudoArgument
-				? *flowTarget.stateValue : target;
+				? *flowTarget.stateValue : target.getValue();
 		if (!llvm::ConstantInt::isValueValidForType(switchType, caseValue)
 				|| !uniqueCaseValues.insert(caseValue).second)
 		{

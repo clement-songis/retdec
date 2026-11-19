@@ -45,6 +45,7 @@ class Abi
 		bool isFlagRegister(const llvm::Value* val);
 		bool isStackPointerRegister(const llvm::Value* val) const;
 		bool isZeroRegister(const llvm::Value* val);
+		bool isCalleeSavedRegister(const llvm::Value* val) const;
 		virtual bool isGeneralPurposeRegister(const llvm::Value* val) const = 0;
 
 		llvm::GlobalVariable* getRegister(uint32_t r, bool use = true) const;

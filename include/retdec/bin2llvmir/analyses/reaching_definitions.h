@@ -150,6 +150,11 @@ class ReachingDefinitionsAnalysis
 				llvm::Instruction* I);
 		static std::set<llvm::Instruction*> usesFromDef_onDemand(
 				llvm::Instruction* I);
+		static bool callMayClobber(
+				const llvm::CallInst* call,
+				const llvm::Value* src,
+				Abi* abi = nullptr,
+				bool trackFlagRegs = false);
 
 	private:
 		void run();

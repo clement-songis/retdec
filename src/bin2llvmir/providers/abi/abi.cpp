@@ -61,6 +61,53 @@ bool Abi::isZeroRegister(const llvm::Value* val)
 	return getZeroRegister() == val;
 }
 
+bool Abi::isCalleeSavedRegister(const llvm::Value* val) const
+{
+	if (_config == nullptr || !isX64() || !isRegister(val))
+	{
+		return false;
+	}
+
+	switch (getRegisterId(val))
+	{
+		case X86_REG_RBX:
+		case X86_REG_RBP:
+		case X86_REG_RSP:
+		case X86_REG_R12:
+		case X86_REG_R13:
+		case X86_REG_R14:
+		case X86_REG_R15:
+			return true;
+		default:
+			break;
+	}
+
+	const auto& c = _config->getConfig();
+	if (!c.fileFormat.isPe() && !c.tools.isMsvc())
+	{
+		return false;
+	}
+
+	switch (getRegisterId(val))
+	{
+		case X86_REG_RSI:
+		case X86_REG_RDI:
+		case X86_REG_XMM6:
+		case X86_REG_XMM7:
+		case X86_REG_XMM8:
+		case X86_REG_XMM9:
+		case X86_REG_XMM10:
+		case X86_REG_XMM11:
+		case X86_REG_XMM12:
+		case X86_REG_XMM13:
+		case X86_REG_XMM14:
+		case X86_REG_XMM15:
+			return true;
+		default:
+			return false;
+	}
+}
+
 /**
  * \param r   Register ID to get.
  *            Warning! We are using Capstone register IDs which overlaps.

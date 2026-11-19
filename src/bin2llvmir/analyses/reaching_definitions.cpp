@@ -29,6 +29,32 @@ using namespace llvm;
 namespace retdec {
 namespace bin2llvmir {
 
+namespace
+{
+
+bool allocaMayEscape(const llvm::AllocaInst* alloca)
+{
+	for (const llvm::User* user : alloca->users())
+	{
+		if (llvm::isa<llvm::LoadInst>(user))
+		{
+			continue;
+		}
+		if (auto* store = llvm::dyn_cast<llvm::StoreInst>(user))
+		{
+			if (store->getPointerOperand() == alloca
+					&& store->getValueOperand() != alloca)
+			{
+				continue;
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
+} // namespace
+
 //
 //=============================================================================
 //  ReachingDefinitionsAnalysis
@@ -69,6 +95,42 @@ bool ReachingDefinitionsAnalysis::runOnFunction(
 	return false;
 }
 
+bool ReachingDefinitionsAnalysis::callMayClobber(
+		const llvm::CallInst* call,
+		const llvm::Value* src,
+		Abi* abi,
+		bool trackFlagRegs)
+{
+	if (call == nullptr || call->onlyReadsMemory())
+	{
+		return false;
+	}
+
+	if (auto* global = llvm::dyn_cast<llvm::GlobalVariable>(src))
+	{
+		if (global->isConstant())
+		{
+			return false;
+		}
+		if (abi && abi->isCalleeSavedRegister(global))
+		{
+			return false;
+		}
+		if (!trackFlagRegs && abi && abi->isFlagRegister(global))
+		{
+			return false;
+		}
+		return true;
+	}
+
+	if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(src))
+	{
+		return allocaMayEscape(alloca);
+	}
+
+	return false;
+}
+
 void ReachingDefinitionsAnalysis::run()
 {
 	initializeBasicBlocksPrev();
@@ -91,6 +153,23 @@ void ReachingDefinitionsAnalysis::initializeBasicBlocks(llvm::Module& M)
 
 void ReachingDefinitionsAnalysis::initializeBasicBlocks(llvm::Function& F)
 {
+	std::set<llvm::Value*> sources;
+	for (BasicBlock& B : F)
+	for (Instruction& I : B)
+	{
+		llvm::Value* src = nullptr;
+		if (auto* l = dyn_cast<LoadInst>(&I)) src = l->getPointerOperand();
+		else if (auto* s = dyn_cast<StoreInst>(&I)) src = s->getPointerOperand();
+		else if (auto* p = dyn_cast<PtrToIntInst>(&I)) src = p->getPointerOperand();
+		else if (auto* g = dyn_cast<GetElementPtrInst>(&I)) src = g->getPointerOperand();
+		else if (auto* a = dyn_cast<AllocaInst>(&I)) src = a;
+
+		if (src && (isa<GlobalVariable>(src) || isa<AllocaInst>(src)))
+		{
+			sources.insert(src);
+		}
+	}
+
 	for (BasicBlock& B : F)
 	{
 		BasicBlockEntry bbe(&B, bbMap.size());
@@ -191,8 +270,14 @@ void ReachingDefinitionsAnalysis::initializeBasicBlocks(llvm::Function& F)
 					}
 				}
 
-				// TODO - can allocated object be read in function call?
-				// is this ok?
+				for (auto* src : sources)
+				{
+					if (src != _specialGlobal
+							&& callMayClobber(call, src, _abi, _trackFlagRegs))
+					{
+						bbe.defs.push_back(Definition(call, src, insnPos));
+					}
+				}
 			}
 			else
 			{
@@ -612,6 +697,13 @@ llvm::Instruction* defInBasicBlock(
 				return s;
 			}
 		}
+		else if (auto* call = dyn_cast<CallInst>(prev))
+		{
+			if (ReachingDefinitionsAnalysis::callMayClobber(call, v))
+			{
+				return prev;
+			}
+		}
 		else if (prev == v) // AllocaInst
 		{
 			return prev;
@@ -655,6 +747,13 @@ bool usesInBasicBlock(
 			if (op == v)
 			{
 				uses.insert(next);
+			}
+		}
+		if (auto* call = dyn_cast<CallInst>(next))
+		{
+			if (ReachingDefinitionsAnalysis::callMayClobber(call, v))
+			{
+				return true;
 			}
 		}
 		next = next->getNextNode();

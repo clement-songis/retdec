@@ -20,6 +20,32 @@ namespace retdec {
 namespace bin2llvmir {
 namespace inst_opt_rda {
 
+namespace
+{
+
+bool callBetweenClobbers(
+		const llvm::StoreInst* store,
+		const llvm::Instruction* use,
+		Abi* abi)
+{
+	for (auto* between = store->getNextNode();
+			between && between != use;
+			between = between->getNextNode())
+	{
+		if (auto* call = llvm::dyn_cast<llvm::CallInst>(between))
+		{
+			if (ReachingDefinitionsAnalysis::callMayClobber(
+					call, store->getPointerOperand(), abi, true))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+} // namespace
+
 /**
  * store i1 %a, i1* <reg/local>
  * ...
@@ -104,6 +130,11 @@ bool usesWithOneDefInSameBb(
 	{
 		return false;
 	}
+	auto* abi = AbiProvider::getAbi(insn->getModule());
+	if (callBetweenClobbers(store, load, abi))
+	{
+		return false;
+	}
 
 	load->replaceAllUsesWith(store->getValueOperand());
 	IrModifier::eraseUnusedInstructionRecursive(load);
@@ -153,7 +184,8 @@ bool defWithUsesInTheSameBb(
 		if (use->use
 				&& store->getParent() == use->use->getParent()
 				&& llvm::isa<llvm::LoadInst>(use->use)
-				&& def->dominates(use))
+				&& def->dominates(use)
+				&& !callBetweenClobbers(store, use->use, abi))
 		{
 			use->use->replaceAllUsesWith(store->getValueOperand());
 			if (toRemove)

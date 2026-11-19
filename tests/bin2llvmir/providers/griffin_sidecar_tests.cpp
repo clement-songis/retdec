@@ -768,6 +768,7 @@ class GriffinStackAnalysisTests: public LlvmIrTests
 						Type::getInt64Ty(context), TraceBase + rva));
 			}
 			config = std::make_unique<Config>(Config::empty(module.get()));
+			config->getConfig().functions.insert(retdec::common::Function("fnc"));
 			config->getConfig().architecture.setName("x86-64");
 			config->getConfig().architecture.setBitSize(64);
 			config->getConfig().parameters.setGriffinSidecar(

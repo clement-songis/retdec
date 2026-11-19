@@ -145,13 +145,14 @@ llvm::SwitchInst* Decoder::transformToSwitch(
 /** Build a switch from proved state/target pairs and fold constant states. */
 bool Decoder::transformToGriffinSwitch(
 		llvm::CallInst* pseudo,
-		const std::vector<std::pair<uint64_t, llvm::BasicBlock*>>& cases)
+		const std::vector<std::pair<uint64_t, llvm::BasicBlock*>>& cases,
+		llvm::Value* switchValue)
 {
 	if (pseudo == nullptr || pseudo->getNumArgOperands() == 0 || cases.size() < 2)
 	{
 		return false;
 	}
-	auto* value = pseudo->getArgOperand(0);
+	auto* value = switchValue ? switchValue : pseudo->getArgOperand(0);
 	auto* intType = llvm::dyn_cast<llvm::IntegerType>(value->getType());
 	if (intType == nullptr)
 	{

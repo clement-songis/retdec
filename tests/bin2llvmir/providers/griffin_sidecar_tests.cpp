@@ -6,12 +6,23 @@
 
 #include <cstdlib>
 #include <memory>
+#include <string>
+
+#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/ScalarEvolution.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include "bin2llvmir/utils/llvmir_tests.h"
+#include "llvmir2hll/config/config_mock.h"
+#include "llvmir2hll/semantics/semantics_mock.h"
 #include "retdec/bin2llvmir/optimizations/decoder/decoder.h"
 #include "retdec/bin2llvmir/optimizations/stack/stack.h"
 #include "retdec/bin2llvmir/providers/griffin_overlay.h"
 #include "retdec/bin2llvmir/providers/griffin_sidecar.h"
+#include "retdec/llvmir2hll/hll/hll_writer.h"
+#include "retdec/llvmir2hll/hll/hll_writers/c_hll_writer.h"
+#include "retdec/llvmir2hll/llvm/llvmir2bir_converter.h"
 
 using namespace ::testing;
 using namespace llvm;
@@ -24,6 +35,78 @@ constexpr uint64_t TraceBase = 0x140000000;
 constexpr uint64_t RuntimeBase = 0xfffff802b93d0000;
 constexpr uint64_t ProvedSiteRva = 0x569140;
 constexpr uint64_t ProvedTargetRva = 0x2a9881;
+
+char CffConversionPassId = 0;
+
+class CffConversionPass: public llvm::ModulePass
+{
+	public:
+		CffConversionPass():
+				llvm::ModulePass(CffConversionPassId),
+				config(std::make_shared<::testing::NiceMock<
+						retdec::llvmir2hll::tests::ConfigMock>>()),
+				semantics(std::make_shared<::testing::NiceMock<
+						retdec::llvmir2hll::tests::SemanticsMock>>())
+		{
+		}
+
+		bool runOnModule(llvm::Module& llvmModule) override
+		{
+			auto converter = retdec::llvmir2hll::LLVMIR2BIRConverter::create(this);
+			birModule = converter->convert(
+					&llvmModule,
+					llvmModule.getModuleIdentifier(),
+					semantics,
+					config);
+			return false;
+		}
+
+		void getAnalysisUsage(llvm::AnalysisUsage& au) const override
+		{
+			au.addRequired<llvm::LoopInfoWrapperPass>();
+			au.addRequired<llvm::ScalarEvolutionWrapperPass>();
+			au.setPreservesAll();
+		}
+
+		std::string emitC() const
+		{
+			if (birModule == nullptr)
+			{
+				return "";
+			}
+			std::string code;
+			llvm::raw_string_ostream stream(code);
+			auto writer = retdec::llvmir2hll::CHLLWriter::create(stream);
+			writer->emitTargetCode(birModule);
+			stream.flush();
+			return code;
+		}
+
+	private:
+		std::shared_ptr<retdec::llvmir2hll::tests::ConfigMock> config;
+		std::shared_ptr<retdec::llvmir2hll::tests::SemanticsMock> semantics;
+		retdec::llvmir2hll::ShPtr<retdec::llvmir2hll::Module> birModule;
+};
+
+std::string convertToC(llvm::Module& module)
+{
+	llvm::legacy::PassManager passManager;
+	passManager.add(new llvm::LoopInfoWrapperPass());
+	passManager.add(new llvm::ScalarEvolutionWrapperPass());
+	auto* conversionPass = new CffConversionPass();
+	passManager.add(conversionPass);
+	passManager.run(module);
+	return conversionPass->emitC();
+}
+
+std::string printModule(llvm::Module& module)
+{
+	std::string ir;
+	llvm::raw_string_ostream stream(ir);
+	module.print(stream, nullptr);
+	stream.flush();
+	return ir;
+}
 
 GriffinSidecar loadFixture()
 {
@@ -846,6 +929,12 @@ TEST_F(GriffinCffDecoderTests, provedStateSetBecomesSwitch)
 			->getCaseSuccessor());
 	EXPECT_TRUE(isa<UnreachableInst>(sw->getDefaultDest()->getTerminator()));
 	EXPECT_FALSE(verifyModule(*module, &errs()));
+	EXPECT_EQ(0, std::count_if(entry->begin(), entry->end(),
+			[](const Instruction& i) { return isa<IndirectBrInst>(i); }));
+	auto c = convertToC(*module);
+	ASSERT_FALSE(c.empty());
+	EXPECT_NE(std::string::npos, c.find("return 7")) << c;
+	EXPECT_NE(std::string::npos, c.find("return 11")) << c;
 }
 
 TEST_F(GriffinCffDecoderTests, constantStateIsReducedToDirectBranch)
@@ -902,7 +991,7 @@ TEST_F(GriffinCffDecoderTests, completeReplayedSingletonBecomesDirectBranch)
 	EXPECT_FALSE(verifyModule(*module, &errs()));
 }
 
-TEST_F(GriffinCffDecoderTests, completeTargetSetWithoutStatesBecomesIndirectBranch)
+TEST_F(GriffinCffDecoderTests, completeTargetSetWithoutStatesBecomesAddressSwitch)
 {
 	parseInput(R"(
 		declare void @__pseudo_br(i64)
@@ -921,12 +1010,114 @@ TEST_F(GriffinCffDecoderTests, completeTargetSetWithoutStatesBecomesIndirectBran
 	registerTargets(entry, case7, case11);
 	auto* pseudo = cast<CallInst>(&entry->front());
 	ASSERT_TRUE(transform(TraceBase + 0x6000, pseudo));
-	auto* indirect = dyn_cast<IndirectBrInst>(entry->getTerminator());
-	ASSERT_NE(nullptr, indirect);
-	ASSERT_EQ(2, indirect->getNumDestinations());
-	EXPECT_EQ(case7, indirect->getDestination(0));
-	EXPECT_EQ(case11, indirect->getDestination(1));
+	auto* sw = dyn_cast<SwitchInst>(entry->getTerminator());
+	ASSERT_NE(nullptr, sw);
+	ASSERT_EQ(2, sw->getNumCases());
+	auto* int64Type = Type::getInt64Ty(context);
+	EXPECT_EQ(case7, sw->findCaseValue(ConstantInt::get(
+			int64Type, TraceBase + 0x3000))->getCaseSuccessor());
+	EXPECT_EQ(case11, sw->findCaseValue(ConstantInt::get(
+			int64Type, TraceBase + 0x4000))->getCaseSuccessor());
+	EXPECT_TRUE(isa<UnreachableInst>(sw->getDefaultDest()->getTerminator()));
+	EXPECT_EQ(0, std::count_if(entry->begin(), entry->end(),
+			[](const Instruction& i) { return isa<IndirectBrInst>(i); }));
 	EXPECT_FALSE(verifyModule(*module, &errs()));
+	auto c = convertToC(*module);
+	ASSERT_FALSE(c.empty());
+	EXPECT_NE(std::string::npos, c.find("return 7")) << c;
+	EXPECT_NE(std::string::npos, c.find("return 11")) << c;
+}
+
+TEST_F(GriffinCffDecoderTests, undefDestinationKeepsWholeSetUnchanged)
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc(i64 %state) {
+		entry:
+			call void @__pseudo_br(i64 %state)
+			ret i64 0
+		case7:
+			ret i64 7
+		case11:
+			ret i64 undef
+		}
+	)");
+	prepareDecoder();
+	llvm::BasicBlock *entry, *case7, *case11;
+	registerTargets(entry, case7, case11);
+	auto* pseudo = cast<CallInst>(&entry->front());
+	auto before = printModule(*module);
+
+	EXPECT_FALSE(transform(TraceBase + 0x5000, pseudo));
+	EXPECT_EQ(before, printModule(*module));
+	EXPECT_TRUE(isa<ReturnInst>(entry->getTerminator()));
+	EXPECT_TRUE(case7->use_empty());
+	EXPECT_TRUE(case11->use_empty());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinCffDecoderTests, missingDestinationNearCurrentBlockKeepsWholeSetUnchanged)
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc(i64 %state) {
+		entry:
+			call void @__pseudo_br(i64 %state)
+			ret i64 0
+		case7:
+			ret i64 7
+		case11:
+			ret i64 11
+		}
+	)");
+	prepareDecoder();
+	llvm::BasicBlock *entry, *case7, *case11;
+	registerTargets(entry, case7, case11);
+	decoder._addr2bb.erase(TraceBase + 0x4000);
+	decoder._bb2addr.erase(case11);
+	auto* pseudo = cast<CallInst>(&entry->front());
+	GriffinSidecar::ControlFlowTargetSet targetSet;
+	targetSet.stateFromPseudoArgument = true;
+	targetSet.targets.push_back({TraceBase + 0x3000, 7});
+	targetSet.targets.push_back({TraceBase + 0x4000, 11});
+	auto before = printModule(*module);
+
+	EXPECT_FALSE(transformSet(TraceBase + 0x5000, pseudo, targetSet));
+	EXPECT_EQ(before, printModule(*module));
+	EXPECT_TRUE(isa<ReturnInst>(entry->getTerminator()));
+	EXPECT_TRUE(case7->use_empty());
+	EXPECT_TRUE(case11->use_empty());
+	EXPECT_EQ(3, getFunctionByName("fnc")->size());
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+}
+
+TEST_F(GriffinCffDecoderTests, insufficientEvidenceFallbackSurvivesThroughC)
+{
+	parseInput(R"(
+		declare void @__pseudo_br(i64)
+		define i64 @fnc(i64 %target) {
+		entry:
+			call void @__pseudo_br(i64 %target)
+			ret i64 0
+		case7:
+			ret i64 7
+		case11:
+			ret i64 11
+		}
+	)");
+	prepareDecoder();
+	llvm::BasicBlock *entry, *case7, *case11;
+	registerTargets(entry, case7, case11);
+	auto* pseudo = cast<CallInst>(&entry->front());
+	auto before = printModule(*module);
+
+	EXPECT_FALSE(transform(TraceBase + 0x7000, pseudo));
+	EXPECT_EQ(before, printModule(*module));
+	EXPECT_TRUE(isa<ReturnInst>(entry->getTerminator()));
+	EXPECT_FALSE(verifyModule(*module, &errs()));
+	auto c = convertToC(*module);
+	ASSERT_FALSE(c.empty());
+	EXPECT_NE(std::string::npos, c.find("__pseudo_br")) << c;
 }
 
 TEST_F(GriffinCffDecoderTests, incompleteOrBadReplayKeepsGenericTerminator)

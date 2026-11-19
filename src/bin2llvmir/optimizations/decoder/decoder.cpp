@@ -805,7 +805,7 @@ bool Decoder::transformToGriffinJump(
 bool Decoder::transformToGriffinControlFlowSet(
 		common::Address addr,
 		llvm::CallInst* pseudo,
-		common::Address nextAddr,
+		common::Address /* nextAddr */,
 		const GriffinSidecar::ControlFlowTargetSet& targetSet)
 {
 	if (targetSet.targets.size() < 2 || pseudo->getNumArgOperands() == 0)
@@ -837,163 +837,72 @@ bool Decoder::transformToGriffinControlFlowSet(
 	}
 
 	auto* currentFnc = pseudo->getFunction();
+	auto* switchType = llvm::dyn_cast<llvm::IntegerType>(controlValue->getType());
+	if (switchType == nullptr)
+	{
+		auto* pointerType = llvm::cast<llvm::PointerType>(controlValue->getType());
+		switchType = llvm::IntegerType::get(
+				_module->getContext(),
+				_module->getDataLayout().getPointerSizeInBits(
+						pointerType->getAddressSpace()));
+	}
 
-	// Validate the complete set before merging or cloning any placeholder.
-	// Otherwise a late unresolved target would leave a partially rewritten CFG
-	// even though the pseudo branch is kept as the fallback.
+	// Validate every destination and switch value before changing the module.
+	// A selected range or a nearby decoded block does not prove that the target
+	// body has been decoded. In particular, never commit an edge to the lone
+	// `ret undef` placeholder made by createBasicBlock().
 	std::set<common::Address> uniqueTargets;
+	std::set<uint64_t> uniqueCaseValues;
+	std::vector<std::pair<common::Address, llvm::BasicBlock*>> resolved;
+	std::vector<std::pair<uint64_t, llvm::BasicBlock*>> cases;
 	for (const auto& flowTarget : targetSet.targets)
 	{
 		auto target = flowTarget.target;
-		if (!uniqueTargets.insert(target).second
-				|| (targetSet.stateFromPseudoArgument && !flowTarget.stateValue))
+		if (!uniqueTargets.insert(target).second)
 		{
 			return false;
 		}
 
 		auto* targetBb = getBasicBlockAtAddress(target);
 		auto* targetFnc = getFunctionAtAddress(target);
-		bool overlap = target > addr && target < nextAddr;
-		if (targetBb && targetBb->getParent() != currentFnc)
+		if (targetBb == nullptr || targetBb->getParent() != currentFnc
+				|| !targetBb->getPrevNode()
+				|| (targetFnc && targetFnc != currentFnc))
 		{
-			targetFnc = targetBb->getParent();
-			// Do not split a different real function merely to resolve one
-			// member of a multi-target branch.
-			if (targetBb != &targetFnc->front())
-			{
-				return false;
-			}
-		}
-		if (targetFnc == nullptr && targetBb == nullptr && !overlap)
-		{
-			auto* containingBb = getBasicBlockContainingAddress(target);
-			auto* containingFnc = getFunctionContainingAddress(target);
-			if ((containingBb && containingBb->getParent() != currentFnc)
-					|| (containingFnc && containingFnc != currentFnc))
-			{
-				return false;
-			}
-			auto* previousBb = getBasicBlockBeforeAddress(target);
-			bool inCurrentFragment = (containingBb &&
-					containingBb->getParent() == currentFnc)
-					|| (containingFnc && containingFnc == currentFnc)
-					|| (previousBb && previousBb->getParent() == currentFnc);
-			// Unknown/external targets must remain fallbacks. An undecoded
-			// target is safe to materialize only when a selected decoding
-			// range covers it, not when it is an arbitrary external VA.
-			if (!inCurrentFragment && _ranges.get(target) == nullptr)
-			{
-				return false;
-			}
-		}
-		if (targetFnc == nullptr || targetFnc == currentFnc)
-		{
-			continue;
-		}
-
-		bool mergeable = targetBb && targetFnc->use_empty();
-		bool cloneable = targetBb
-				&& targetFnc->getReturnType() == currentFnc->getReturnType();
-		for (const auto& bb : *targetFnc)
-		{
-			if (!llvm::isa<llvm::ReturnInst>(bb.getTerminator()))
-			{
-				mergeable = false;
-				cloneable = false;
-				break;
-			}
-		}
-		if (cloneable)
-		{
-			auto* ret = llvm::cast<llvm::ReturnInst>(targetBb->getTerminator());
-			cloneable = ret->getReturnValue() == nullptr
-					|| llvm::isa<llvm::Constant>(ret->getReturnValue());
-		}
-		if (!mergeable && !cloneable)
-		{
-			LOG << "\t\t" << "Griffin CFF target is not a safe placeholder @ "
+			LOG << "\t\t" << "Griffin CFF target is not decoded in current function @ "
 					<< target << " -> leave complete set unresolved" << std::endl;
 			return false;
 		}
-	}
-
-	std::vector<std::pair<common::Address, llvm::BasicBlock*>> resolved;
-	for (const auto& flowTarget : targetSet.targets)
-	{
-		auto target = flowTarget.target;
-		bool overlap = target > addr && target < nextAddr;
-		llvm::Function* targetFnc = nullptr;
-		llvm::BasicBlock* targetBb = nullptr;
-		if (overlap)
+		if (targetBb->size() == 1)
 		{
-			targetBb = getBasicBlockAtAddress(target);
-			if (targetBb && targetBb->getParent() != currentFnc
-					&& !cloneGriffinJumpTargetPlaceholder(
-							targetBb->getParent(), targetBb, currentFnc, target))
+			auto* ret = llvm::dyn_cast<llvm::ReturnInst>(targetBb->getTerminator());
+			if (ret && (ret->getReturnValue() == nullptr
+					|| llvm::isa<llvm::UndefValue>(ret->getReturnValue())))
 			{
-				return false;
-			}
-			if (targetBb == nullptr)
-			{
-				targetBb = createBasicBlock(target, currentFnc);
-			}
-			if (!targetBb->getPrevNode())
-			{
+				LOG << "\t\t" << "Griffin CFF target is only a return placeholder @ "
+						<< target << " -> leave complete set unresolved" << std::endl;
 				return false;
 			}
 		}
-		else
+		uint64_t caseValue = targetSet.stateFromPseudoArgument
+				? *flowTarget.stateValue : target;
+		if (!llvm::ConstantInt::isValueValidForType(switchType, caseValue)
+				|| !uniqueCaseValues.insert(caseValue).second)
 		{
-			getOrCreateBranchTarget(target, targetBb, targetFnc, pseudo);
-			if (targetBb && targetBb->getParent() == currentFnc
-					&& targetBb->getPrevNode())
-			{
-				// Resolved inside the current Griffin fragment.
-			}
-			else if (!targetFnc
-					|| (!mergeGriffinJumpTarget(targetFnc, targetBb, currentFnc)
-							&& !cloneGriffinJumpTargetPlaceholder(
-									targetFnc, targetBb, currentFnc, target)))
-			{
-				LOG << "\t\t" << "Griffin CFF target outside current function @ "
-						<< target << " -> leave set unresolved" << std::endl;
-				return false;
-			}
+			return false;
 		}
 		resolved.emplace_back(target, targetBb);
+		cases.emplace_back(caseValue, targetBb);
 	}
 
-	bool transformed = false;
-	if (targetSet.stateFromPseudoArgument)
-	{
-		std::vector<std::pair<uint64_t, llvm::BasicBlock*>> cases;
-		for (std::size_t i = 0; i < resolved.size(); ++i)
-		{
-			cases.emplace_back(*targetSet.targets[i].stateValue, resolved[i].second);
-		}
-		transformed = transformToGriffinSwitch(pseudo, cases);
-	}
-	else
+	if (!controlValue->getType()->isIntegerTy())
 	{
 		auto* term = pseudo->getParent()->getTerminator();
 		assert(pseudo->getNextNode() == term);
-		if (!controlValue->getType()->isPointerTy())
-		{
-			controlValue = new llvm::IntToPtrInst(
-					controlValue,
-					llvm::Type::getInt8PtrTy(_module->getContext()),
-					"griffin_cff_target",
-					term);
-		}
-		auto* indirect = llvm::IndirectBrInst::Create(
-				controlValue, resolved.size(), term);
-		for (const auto& target : resolved)
-		{
-			indirect->addDestination(target.second);
-		}
-		term->eraseFromParent();
-		transformed = true;
+		controlValue = new llvm::PtrToIntInst(
+				controlValue, switchType, "griffin_cff_target", term);
 	}
+	bool transformed = transformToGriffinSwitch(pseudo, cases, controlValue);
 	if (!transformed)
 	{
 		return false;
@@ -1011,7 +920,7 @@ bool Decoder::transformToGriffinControlFlowSet(
 		}
 	}
 	LOG << "\t\t" << "Griffin CFF @ " << addr << " -> "
-			<< (targetSet.stateFromPseudoArgument ? "switch" : "indirectbr")
+			<< (targetSet.stateFromPseudoArgument ? "state-switch" : "address-switch")
 			<< " (" << resolved.size() << " proved targets)" << std::endl;
 	return true;
 }

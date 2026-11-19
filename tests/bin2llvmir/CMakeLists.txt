@@ -48,6 +48,7 @@ target_compile_definitions(tests-bin2llvmir
 
 target_link_libraries(tests-bin2llvmir
 	retdec::bin2llvmir
+	retdec::llvmir2hll
 	retdec::utils
 	retdec::deps::gmock_main
 )
@@ -74,6 +75,7 @@ target_compile_definitions(tests-griffin PRIVATE
 	RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json")
 target_link_libraries(tests-griffin
 	retdec::bin2llvmir
+	retdec::llvmir2hll
 	retdec::utils
 	retdec::deps::gmock_main)
 set_target_properties(tests-griffin PROPERTIES OUTPUT_NAME "retdec-tests-griffin")

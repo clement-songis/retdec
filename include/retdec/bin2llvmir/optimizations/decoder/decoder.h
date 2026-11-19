@@ -155,7 +155,8 @@ class Decoder : public llvm::ModulePass
 				const GriffinSidecar::ControlFlowTargetSet& targetSet);
 		bool transformToGriffinSwitch(
 				llvm::CallInst* pseudo,
-				const std::vector<std::pair<uint64_t, llvm::BasicBlock*>>& cases);
+				const std::vector<std::pair<uint64_t, llvm::BasicBlock*>>& cases,
+				llvm::Value* switchValue = nullptr);
 		bool mergeGriffinJumpTarget(
 				llvm::Function* targetFnc,
 				llvm::BasicBlock* targetBb,

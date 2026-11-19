@@ -240,8 +240,11 @@ void StackAnalysis::handleInstruction(
 				inst);
 		auto* newStore = new StoreInst(conv, a, inst);
 		newStore->setVolatile(s->isVolatile());
-		newStore->setOrdering(s->getOrdering());
-		newStore->setSyncScope(s->getSyncScope());
+		if (s->isAtomic())
+		{
+			newStore->setOrdering(s->getOrdering());
+			newStore->setSyncScopeID(s->getSyncScopeID());
+		}
 		newStore->setAlignment(s->getAlignment());
 		newStore->copyMetadata(*s);
 		newStore->setDebugLoc(s->getDebugLoc());
@@ -251,8 +254,11 @@ void StackAnalysis::handleInstruction(
 	{
 		auto* nl = new LoadInst(a, "", l);
 		nl->setVolatile(l->isVolatile());
-		nl->setOrdering(l->getOrdering());
-		nl->setSyncScope(l->getSyncScope());
+		if (l->isAtomic())
+		{
+			nl->setOrdering(l->getOrdering());
+			nl->setSyncScopeID(l->getSyncScopeID());
+		}
 		nl->setAlignment(l->getAlignment());
 		nl->copyMetadata(*l);
 		nl->setDebugLoc(l->getDebugLoc());

@@ -240,11 +240,22 @@ void StackAnalysis::handleInstruction(
 				inst);
 		auto* newStore = new StoreInst(conv, a, inst);
 		newStore->setVolatile(s->isVolatile());
+		newStore->setOrdering(s->getOrdering());
+		newStore->setSyncScope(s->getSyncScope());
+		newStore->setAlignment(s->getAlignment());
+		newStore->copyMetadata(*s);
+		newStore->setDebugLoc(s->getDebugLoc());
 		_toRemove.insert(s);
 	}
 	else if (l && l->getPointerOperand() == val)
 	{
 		auto* nl = new LoadInst(a, "", l);
+		nl->setVolatile(l->isVolatile());
+		nl->setOrdering(l->getOrdering());
+		nl->setSyncScope(l->getSyncScope());
+		nl->setAlignment(l->getAlignment());
+		nl->copyMetadata(*l);
+		nl->setDebugLoc(l->getDebugLoc());
 		auto* conv = IrModifier::convertValueToType(nl, l->getType(), l);
 		l->replaceAllUsesWith(conv);
 		_toRemove.insert(l);

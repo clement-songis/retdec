@@ -346,15 +346,27 @@ void Decoder::initAllowedRangesWithConfig()
 		if (_griffinOverlay)
 		{
 			if (auto bounds = _griffinOverlay->getExecutedBounds(
-					p.getStart(), p.getEnd());
-					bounds && bounds->first > p.getStart())
+					p.getStart(), p.getEnd()))
 			{
-				// Do not let a non-executed prefix choose a decoding that hides
-				// the first proved runtime boundary. The prefix remains unproved.
-				selectedRange.setStart(bounds->first);
-				LOG << "\t" << "Griffin overlay: non-executed prefix @ "
-						<< p.getStart() << " skipped; proved start @ "
-						<< bounds->first << std::endl;
+				if (bounds->first > p.getStart())
+				{
+					// Do not let a non-executed prefix choose a decoding that hides
+					// the first proved runtime boundary. The prefix remains unproved.
+					selectedRange.setStart(bounds->first);
+					LOG << "\t" << "Griffin overlay: non-executed prefix @ "
+							<< p.getStart() << " skipped; proved start @ "
+							<< bounds->first << std::endl;
+				}
+				if (bounds->second < p.getEnd())
+				{
+					// This tail has no dynamic instruction boundary. Keep it out of
+					// the provider decode rather than manufacturing static-only
+					// functions/branches and counting them as dynamic gains.
+					selectedRange.setEnd(bounds->second);
+					LOG << "\t" << "Griffin overlay: static-only non-executed tail @ "
+							<< bounds->second << " -- " << p.getEnd()
+							<< " excluded from provider decode" << std::endl;
+				}
 			}
 		}
 		_ranges.addPrimary(selectedRange);

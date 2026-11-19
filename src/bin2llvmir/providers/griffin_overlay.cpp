@@ -266,6 +266,30 @@ GriffinOverlay GriffinOverlay::fromFile(const std::string& path)
 			}
 		}
 	}
+	for (const auto& range : result._observedRanges)
+	{
+		auto it = result._entries.lower_bound(range.startRva);
+		if (it == result._entries.end() || it->first >= range.endRva)
+		{
+			// Without at least one proved instruction there is no evidence that
+			// the whole range is dead; retain the ordinary static fallback.
+			continue;
+		}
+		uint64_t first = it->first;
+		uint64_t lastEnd = first;
+		for (; it != result._entries.end() && it->first < range.endRva; ++it)
+		{
+			lastEnd = std::max(lastEnd, it->first + it->second.data.size());
+		}
+		if (first > range.startRva)
+		{
+			result._nonExecutedRanges.push_back({range.startRva, first});
+		}
+		if (lastEnd < range.endRva)
+		{
+			result._nonExecutedRanges.push_back({lastEnd, range.endRva});
+		}
+	}
 	return result;
 }
 
@@ -380,6 +404,36 @@ std::optional<std::pair<uint64_t, uint64_t>> GriffinOverlay::getExecutedBounds(
 		}
 	}
 	return std::nullopt;
+}
+
+bool GriffinOverlay::isNonExecuted(uint64_t address) const
+{
+	for (auto base : _bases)
+	{
+		if (address < base || address - base >= _imageSize)
+		{
+			continue;
+		}
+		uint64_t rva = address - base;
+		for (const auto& range : _nonExecutedRanges)
+		{
+			if (range.startRva <= rva && rva < range.endRva)
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+std::size_t GriffinOverlay::getNonExecutedBoundaryByteCount() const
+{
+	std::size_t result = 0;
+	for (const auto& range : _nonExecutedRanges)
+	{
+		result += range.endRva - range.startRva;
+	}
+	return result;
 }
 
 std::size_t GriffinOverlay::getEntryCount() const

@@ -123,6 +123,19 @@ TEST_F(GriffinOverlayTests, nonExecutedPrefixYieldsToFirstProvenBoundary)
 			overlay.getEntryStarts(TraceBase + 0x8000, TraceBase + 0x8002));
 }
 
+TEST_F(GriffinOverlayTests, staticOnlyTailIsExplicitlyGuarded)
+{
+	auto overlay = GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST);
+
+	EXPECT_EQ(110, overlay.getNonExecutedBoundaryByteCount());
+	EXPECT_TRUE(overlay.isNonExecuted(TraceBase + 0x8000));
+	EXPECT_FALSE(overlay.isNonExecuted(TraceBase + 0x8001));
+	EXPECT_FALSE(overlay.isNonExecuted(TraceBase + 0x8003));
+	EXPECT_TRUE(overlay.isNonExecuted(TraceBase + 0x8004));
+	EXPECT_TRUE(overlay.isNonExecuted(TraceBase + 0x8070));
+	EXPECT_FALSE(overlay.isNonExecuted(TraceBase + 0x8071));
+}
+
 TEST_F(GriffinOverlayTests, rangeExtensionPreservesAlternativeDecoding)
 {
 	RangesToDecode ranges;

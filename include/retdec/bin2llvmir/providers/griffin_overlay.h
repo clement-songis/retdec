@@ -38,6 +38,8 @@ class GriffinOverlay
 		std::vector<uint64_t> getEntryStarts(
 				uint64_t startAddress,
 				uint64_t endAddress) const;
+		bool isNonExecuted(uint64_t address) const;
+		std::size_t getNonExecutedBoundaryByteCount() const;
 
 		std::size_t getEntryCount() const;
 		std::size_t getAppliedByteCount() const;
@@ -59,6 +61,7 @@ class GriffinOverlay
 		std::string _imageSha256;
 		std::map<uint64_t, Entry> _entries;
 		std::vector<ObservedRange> _observedRanges;
+		std::vector<ObservedRange> _nonExecutedRanges;
 		std::set<uint64_t> _conflicts;
 		std::map<uint64_t, std::uint8_t> _uniqueBytes;
 };

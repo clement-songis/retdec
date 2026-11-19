@@ -770,6 +770,23 @@ class GriffinDecoderTests: public LlvmIrTests
 			EXPECT_EQ(TraceBase + 0x8001, proved->getStart());
 			EXPECT_EQ(end, proved->getEnd());
 		}
+
+		void staticOnlyTailRejectsStaleDecodeTarget()
+		{
+			decoder._griffinOverlay = std::make_unique<GriffinOverlay>(
+					GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_BOUNDARIES_TEST));
+			auto tail = TraceBase + 0x8004;
+			decoder._ranges.addPrimary(tail, TraceBase + 0x8071);
+			JumpTarget target(
+					tail,
+					JumpTarget::eType::LEFTOVER,
+					CS_MODE_LITTLE_ENDIAN,
+					Address::Undefined);
+
+			decoder.decodeJumpTarget(target);
+
+			EXPECT_EQ(nullptr, decoder._ranges.getPrimary(tail));
+		}
 };
 
 class GriffinCffDecoderTests: public LlvmIrTests
@@ -1356,6 +1373,11 @@ TEST_F(GriffinDecoderTests, overlappedTargetRangeSurvivesAndRejectedRetDoesNot)
 TEST_F(GriffinDecoderTests, nonExecutedPrefixCannotConsumeProvenOverlayStart)
 {
 	nonExecutedPrefixCannotConsumeProvenOverlayStart();
+}
+
+TEST_F(GriffinDecoderTests, staticOnlyTailRejectsStaleDecodeTarget)
+{
+	staticOnlyTailRejectsStaleDecodeTarget();
 }
 
 } // namespace tests

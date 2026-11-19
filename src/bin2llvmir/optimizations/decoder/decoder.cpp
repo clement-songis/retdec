@@ -137,7 +137,9 @@ bool Decoder::run()
 				*_image->getImage(), _image->getImage()->getBaseAddress());
 		LOG << "Griffin overlay: " << count << " entries, "
 				<< _griffinOverlay->getAppliedByteCount() << " unique bytes, "
-				<< _griffinOverlay->getConflictCount() << " conflicts skipped\n";
+				<< _griffinOverlay->getConflictCount() << " conflicts skipped, "
+				<< _griffinOverlay->getNonExecutedBoundaryByteCount()
+				<< " non-executed prefix/tail bytes guarded\n";
 	}
 
 	initTranslator();
@@ -287,6 +289,15 @@ void Decoder::decodeJumpTarget(const JumpTarget& jt)
 	if (jt.getFromAddress().isUndefined() && jt.getType() == JumpTarget::eType::IMPORT)
 	{
 		LOG << "\t\t" << "target address in data section -> skip" << std::endl;
+		return;
+	}
+	if (_griffinOverlay && _griffinOverlay->isNonExecuted(start))
+	{
+		// Selected-range starts are normalized during initialization, but a
+		// symbol/export/config target can still point into an unexecuted tail.
+		// Never silently promote those static bytes to dynamic-backed code.
+		LOG << "\t\t" << "non-executed overlay prefix/tail -> skip" << std::endl;
+		_ranges.remove(start, start + 1);
 		return;
 	}
 

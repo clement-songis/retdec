@@ -121,6 +121,10 @@ TEST_F(GriffinOverlayTests, nonExecutedPrefixYieldsToFirstProvenBoundary)
 	EXPECT_EQ(bytes({0x90}), image.writes[TraceBase + 0x8001]);
 	EXPECT_EQ(std::vector<uint64_t>({TraceBase + 0x8001}),
 			overlay.getEntryStarts(TraceBase + 0x8000, TraceBase + 0x8002));
+	auto firstOnly = overlay.getExecutedBounds(TraceBase + 0x8000, TraceBase + 0x8001);
+	ASSERT_TRUE(firstOnly);
+	EXPECT_EQ(TraceBase + 0x8001, firstOnly->first);
+	EXPECT_EQ(TraceBase + 0x8002, firstOnly->second);
 }
 
 TEST_F(GriffinOverlayTests, staticOnlyTailIsExplicitlyGuarded)

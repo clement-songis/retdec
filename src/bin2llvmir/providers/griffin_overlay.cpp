@@ -385,10 +385,11 @@ std::optional<std::pair<uint64_t, uint64_t>> GriffinOverlay::getExecutedBounds(
 			{
 				continue;
 			}
-			// Selected ranges historically use an inclusive last-byte address,
-			// while the overlay summary uses an exclusive end. Accept both.
-			uint64_t effectiveEnd = endRva == range.endRva - 1
-					? range.endRva : std::min(endRva, range.endRva);
+			// Selected ranges use an inclusive last-byte address, while the
+			// overlay summary uses an exclusive end. Also accept an already
+			// exclusive end by saturating at the observed range boundary.
+			uint64_t effectiveEnd = endRva >= range.endRva
+					? range.endRva : std::min(endRva + 1, range.endRva);
 			auto it = _entries.lower_bound(std::max(startRva, range.startRva));
 			if (it == _entries.end() || it->first >= effectiveEnd)
 			{

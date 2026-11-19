@@ -5,6 +5,7 @@
 */
 
 #include "retdec/bin2llvmir/optimizations/decoder/decoder.h"
+#include "retdec/bin2llvmir/providers/griffin_overlay.h"
 #include "retdec/utils/string.h"
 
 #include "retdec/loader/loader/elf/elf_image.h"

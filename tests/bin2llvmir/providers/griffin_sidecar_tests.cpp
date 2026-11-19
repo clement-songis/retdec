@@ -23,6 +23,7 @@
 #include "retdec/llvmir2hll/hll/hll_writer.h"
 #include "retdec/llvmir2hll/hll/hll_writers/c_hll_writer.h"
 #include "retdec/llvmir2hll/llvm/llvmir2bir_converter.h"
+#include "retdec/llvmir2hll/support/types.h"
 
 using namespace ::testing;
 using namespace llvm;
@@ -48,6 +49,8 @@ class CffConversionPass: public llvm::ModulePass
 				semantics(std::make_shared<::testing::NiceMock<
 						retdec::llvmir2hll::tests::SemanticsMock>>())
 		{
+			ON_CALL(*config, getAddressRangeForFunc(_))
+					.WillByDefault(Return(retdec::llvmir2hll::NO_ADDRESS_RANGE));
 		}
 
 		bool runOnModule(llvm::Module& llvmModule) override
@@ -794,6 +797,12 @@ class GriffinCffDecoderTests: public LlvmIrTests
 			decoder._bb2addr[case11] = TraceBase + 0x4000;
 		}
 
+		void unregisterSecondTarget(llvm::BasicBlock* target)
+		{
+			decoder._addr2bb.erase(TraceBase + 0x4000);
+			decoder._bb2addr.erase(target);
+		}
+
 		void lateUnsafeTargetDoesNotPartiallyMergeSet();
 		void missingStateDoesNotPartiallyRewriteSet();
 
@@ -1073,8 +1082,7 @@ TEST_F(GriffinCffDecoderTests, missingDestinationNearCurrentBlockKeepsWholeSetUn
 	prepareDecoder();
 	llvm::BasicBlock *entry, *case7, *case11;
 	registerTargets(entry, case7, case11);
-	decoder._addr2bb.erase(TraceBase + 0x4000);
-	decoder._bb2addr.erase(case11);
+	unregisterSecondTarget(case11);
 	auto* pseudo = cast<CallInst>(&entry->front());
 	GriffinSidecar::ControlFlowTargetSet targetSet;
 	targetSet.stateFromPseudoArgument = true;

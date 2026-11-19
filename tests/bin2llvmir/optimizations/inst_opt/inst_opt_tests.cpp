@@ -21,7 +21,36 @@ namespace tests {
  */
 class OptimizeTests: public LlvmIrTests
 {
+	protected:
+		void checkLoadPairNotMerged(
+				const std::string& load,
+				const std::string& between)
+		{
+			std::string input =
+					"@reg = global i32 0\n"
+					"declare void @g()\n";
+			for (const char* op : {"xor", "or", "and"})
+			{
+				std::string operation(op);
+				input += "\ndefine i32 @" + operation + "_case() {\n"
+						"  %first = " + load + "\n"
+						+ between +
+						"  %second = " + load + "\n"
+						"  %" + operation + "_result = " + operation
+								+ " i32 %first, %second\n"
+						"  ret i32 %" + operation + "_result\n"
+						"}\n";
+			}
+			parseInput(input);
 
+			for (const char* op : {"xor", "or", "and"})
+			{
+				std::string operation(op);
+				auto* i = getInstructionByName(operation + "_result");
+				EXPECT_FALSE(inst_opt::optimize(i)) << operation;
+			}
+			checkModuleAgainstExpectedIr(input);
+		}
 };
 
 namespace
@@ -604,6 +633,50 @@ TEST_F(OptimizeTests, andLoadXLoadX)
 	)";
 	checkModuleAgainstExpectedIr(exp);
 	EXPECT_TRUE(ret);
+}
+
+TEST_F(OptimizeTests, loadPairStoreBetweenPreventsMerge)
+{
+	checkLoadPairNotMerged(
+			"load i32, i32* @reg",
+			"  store i32 7, i32* @reg\n");
+}
+
+TEST_F(OptimizeTests, loadPairCallBetweenPreventsMerge)
+{
+	checkLoadPairNotMerged(
+			"load i32, i32* @reg",
+			"  call void @g()\n");
+}
+
+TEST_F(OptimizeTests, volatileLoadPairsAreNotMerged)
+{
+	checkLoadPairNotMerged("load volatile i32, i32* @reg", "");
+}
+
+TEST_F(OptimizeTests, xorOfSameVolatileLoadPreservesTheLoad)
+{
+	parseInput(R"(
+		@reg = global i32 0
+		define i32 @fnc() {
+			%a = load volatile i32, i32* @reg
+			%c = xor i32 %a, %a
+			ret i32 %c
+		}
+	)");
+	auto* i = getInstructionByName("c");
+
+	bool ret = inst_opt::optimize(i);
+
+	EXPECT_TRUE(ret);
+	std::string exp = R"(
+		@reg = global i32 0
+		define i32 @fnc() {
+			%a = load volatile i32, i32* @reg
+			ret i32 0
+		}
+	)";
+	checkModuleAgainstExpectedIr(exp);
 }
 
 //

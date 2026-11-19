@@ -152,6 +152,46 @@ bool xorXX(llvm::Instruction* insn)
 	return true;
 }
 
+namespace
+{
+
+bool canMergeLoads(llvm::LoadInst* l1, llvm::LoadInst* l2)
+{
+	if (l1 == l2)
+	{
+		return true;
+	}
+	if (!l1->isSimple() || !l2->isSimple()
+			|| l1->getParent() != l2->getParent())
+	{
+		return false;
+	}
+
+	auto* first = l1->comesBefore(l2) ? l1 : l2;
+	auto* second = first == l1 ? l2 : l1;
+	for (auto* between = first->getNextNode();
+			between != second;
+			between = between->getNextNode())
+	{
+		if (between->mayWriteToMemory()
+				|| between->mayHaveSideEffects()
+				|| llvm::isa<llvm::CallInst>(between))
+		{
+			return false;
+		}
+		if (auto* load = llvm::dyn_cast<llvm::LoadInst>(between))
+		{
+			if (!load->isSimple())
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+} // namespace
+
 /**
  * a = load x
  * b = load x
@@ -172,18 +212,19 @@ bool xorLoadXX(llvm::Instruction* insn)
 	}
 	LoadInst* l1 = cast<LoadInst>(i1);
 	LoadInst* l2 = cast<LoadInst>(i2);
-	if (l1->getPointerOperand() != l2->getPointerOperand())
+	if (l1->getPointerOperand() != l2->getPointerOperand()
+			|| !canMergeLoads(l1, l2))
 	{
 		return false;
 	}
 
 	insn->replaceAllUsesWith(ConstantInt::get(insn->getType(), 0));
 	insn->eraseFromParent();
-	if (l1->user_empty())
+	if (l1->user_empty() && l1->isSimple())
 	{
 		l1->eraseFromParent();
 	}
-	if (l2 != l1 && l2->user_empty())
+	if (l2 != l1 && l2->user_empty() && l2->isSimple())
 	{
 		l2->eraseFromParent();
 	}
@@ -248,14 +289,15 @@ bool orAndLoadXX(llvm::Instruction* insn)
 	LoadInst* l2 = dyn_cast<LoadInst>(i2);
 	if (l1 == nullptr
 			|| l2 == nullptr
-			|| l1->getPointerOperand() != l2->getPointerOperand())
+			|| l1->getPointerOperand() != l2->getPointerOperand()
+			|| !canMergeLoads(l1, l2))
 	{
 		return false;
 	}
 
 	insn->replaceAllUsesWith(l1);
 	insn->eraseFromParent();
-	if (l2->user_empty())
+	if (l2->user_empty() && l2->isSimple())
 	{
 		l2->eraseFromParent();
 	}

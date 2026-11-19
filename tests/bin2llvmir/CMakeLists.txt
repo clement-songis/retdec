@@ -21,6 +21,7 @@ add_executable(tests-bin2llvmir
 	providers/fileimage_tests.cpp
 	providers/griffin_overlay_tests.cpp
 	providers/griffin_sidecar_tests.cpp
+	providers/griffin_witness_validation_tests.cpp
 	providers/lti_tests.cpp
 	providers/names.cpp
 	utils/ctypes2llvm_type_tests.cpp
@@ -41,6 +42,7 @@ target_compile_definitions(tests-bin2llvmir
 		RETDEC_GRIFFIN_STACK_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_stack_test.json"
 		RETDEC_GRIFFIN_CFF_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_cff_test.json"
 		RETDEC_GRIFFIN_OVERLAY_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_test.json"
+		RETDEC_GRIFFIN_OVERLAY_WITNESS_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_witness_test.json"
 		RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json"
 )
 
@@ -59,7 +61,8 @@ set_target_properties(tests-bin2llvmir
 # bin2llvmir test suite when iterating on the Decoder integration.
 add_executable(tests-griffin
 	providers/griffin_overlay_tests.cpp
-	providers/griffin_sidecar_tests.cpp)
+	providers/griffin_sidecar_tests.cpp
+	providers/griffin_witness_validation_tests.cpp)
 target_include_directories(tests-griffin PRIVATE ${RETDEC_TESTS_DIR})
 target_compile_definitions(tests-griffin PRIVATE
 	RETDEC_GRIFFIN_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_sidecar_test.json"
@@ -67,6 +70,7 @@ target_compile_definitions(tests-griffin PRIVATE
 	RETDEC_GRIFFIN_STACK_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_stack_test.json"
 	RETDEC_GRIFFIN_CFF_TEST_SIDECAR="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_cff_test.json"
 	RETDEC_GRIFFIN_OVERLAY_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_test.json"
+	RETDEC_GRIFFIN_OVERLAY_WITNESS_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_witness_test.json"
 	RETDEC_GRIFFIN_OVERLAY_CONFLICT_TEST="${CMAKE_CURRENT_SOURCE_DIR}/providers/griffin_overlay_conflict_test.json")
 target_link_libraries(tests-griffin
 	retdec::bin2llvmir

@@ -290,8 +290,8 @@ TEST_F(GriffinSidecarV2Tests, rejectsScratchAmbiguousMultiTargetAndBadReplay)
 	EXPECT_TRUE(sidecar.checkImageSha256(
 			"c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390"));
 	EXPECT_FALSE(sidecar.checkImageSha256(std::string(64, '0')));
-	EXPECT_EQ(1, sidecar.getControlTargetCount());
-	EXPECT_EQ(0, sidecar.getDynamicVerifiedTargetCount());
+	EXPECT_EQ(3, sidecar.getControlTargetCount());
+	EXPECT_EQ(1, sidecar.getDynamicVerifiedTargetCount());
 	ASSERT_TRUE(sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
 	EXPECT_EQ(TraceBase + 0x2a9881,
 			*sidecar.getControlTarget(TraceBase + 0x463ade, "call"));
@@ -313,6 +313,7 @@ class GriffinDecoderTests: public LlvmIrTests
 		std::unique_ptr<Config> v2Config;
 		Decoder decoder;
 		GriffinSidecar sidecar = loadFixture();
+		std::unique_ptr<Config> v2Config;
 
 		void prepareDecoder()
 		{
@@ -447,7 +448,39 @@ class GriffinDecoderTests: public LlvmIrTests
 			decoder._config = v2Config.get();
 			decoder._abi = AbiProvider::addAbi(module.get(), v2Config.get());
 			decoder._griffin = std::make_unique<GriffinSidecar>(
-					GriffinSidecar::fromFile(std::getenv("RETDEC_GRIFFIN_V2_WITNESS")));
+					GriffinSidecar::fromFile(RETDEC_GRIFFIN_V2_TEST_SIDECAR));
+		}
+
+		void rejectedAndScratchControlsLeaveModuleUnchanged()
+		{
+			parseInput(R"(
+				declare void @__pseudo_br(i64)
+				declare void @__pseudo_ret(i64)
+				define i64 @fnc() {
+				entry:
+					call void @__pseudo_br(i64 1)
+					call void @__pseudo_br(i64 2)
+					call void @__pseudo_br(i64 3)
+					call void @__pseudo_ret(i64 0)
+					ret i64 0
+				}
+			)");
+			prepareV2Decoder();
+			auto before = llvmObjToString(module.get());
+			auto& entry = getFunctionByName("fnc")->getEntryBlock();
+			auto it = entry.begin();
+			for (uint64_t site : {0xbeef, 0xcafe, 0xdead})
+			{
+				auto* pseudo = cast<CallInst>(&*it++);
+				EXPECT_FALSE(decoder.transformToGriffinJump(
+						TraceBase + site, pseudo, TraceBase + site + 1));
+			}
+			auto* scratchRet = cast<CallInst>(&*it);
+			EXPECT_FALSE(decoder.transformToGriffinRetTrampoline(
+					TraceBase + 0x569140, scratchRet));
+
+			EXPECT_EQ(before, llvmObjToString(module.get()));
+			EXPECT_FALSE(verifyModule(*module, &errs()));
 		}
 
 		void provedCallBecomesCall()
@@ -601,9 +634,9 @@ class GriffinDecoderTests: public LlvmIrTests
 		void overlappedTargetRangeSurvivesAndRejectedRetDoesNot()
 		{
 			decoder._griffin = std::make_unique<GriffinSidecar>(
-					GriffinSidecar::fromFile(std::getenv("RETDEC_GRIFFIN_V2_WITNESS")));
+					GriffinSidecar::fromFile(RETDEC_GRIFFIN_V2_TEST_SIDECAR));
 			decoder._griffinOverlay = std::make_unique<GriffinOverlay>(
-					GriffinOverlay::fromFile(std::getenv("RETDEC_GRIFFIN_OVERLAY")));
+					GriffinOverlay::fromFile(RETDEC_GRIFFIN_OVERLAY_WITNESS_TEST));
 			auto start = RuntimeBase + 0x58df7f;
 			auto end = RuntimeBase + 0x58df81;
 			decoder._ranges.addPrimary(start, end);
@@ -1062,6 +1095,11 @@ TEST_F(GriffinDecoderTests, undecodedTargetIsCreatedOnlyInCurrentFunction)
 TEST_F(GriffinDecoderTests, provedCallBecomesCall)
 {
 	provedCallBecomesCall();
+}
+
+TEST_F(GriffinDecoderTests, rejectedAndScratchControlsLeaveModuleUnchanged)
+{
+	rejectedAndScratchControlsLeaveModuleUnchanged();
 }
 
 TEST_F(GriffinDecoderTests, provedJumpMergesPlaceholderWithoutCall)

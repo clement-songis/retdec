@@ -22,6 +22,25 @@
       "replay": {"status": "match", "actualTargetRva": "0x2a9881"}
     },
     {
+      "observationId": "dynamic-ok",
+      "sourceRva": "0x58df90",
+      "targetRva": "0x27cee7",
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+      "classification": "dynamic-verified",
+      "context": {"complete": true},
+      "replay": {"status": "match", "actualTargetRva": "0x27cee7"},
+      "scratch-taint": {"tainted": false, "unknown": false}
+    },
+    {
+      "observationId": "overlap-ok",
+      "sourceRva": "0x58df7f",
+      "targetRva": "0x58df80",
+      "imageSha256": "c8ca7db29692b5e5317c66f980ea45b868cb28466edd5e57d9439cceee88e390",
+      "classification": "static",
+      "staticTargetRva": "0x58df80",
+      "replay": {"status": "match", "actualTargetRva": "0x58df80"}
+    },
+    {
       "observationId": "scratch-no",
       "sourceRva": "0x569140",
       "targetRva": "0x0",
@@ -68,6 +87,24 @@
       "classification": "static",
       "providerEligible": true,
       "observationIds": ["static-ok"]
+    },
+    {
+      "siteRva": "0x58df90",
+      "kind": "jmp",
+      "targetRva": "0x27cee7",
+      "targets": ["0x27cee7"],
+      "classification": "dynamic-verified",
+      "providerEligible": true,
+      "observationIds": ["dynamic-ok"]
+    },
+    {
+      "siteRva": "0x58df7f",
+      "kind": "jmp",
+      "targetRva": "0x58df80",
+      "targets": ["0x58df80"],
+      "classification": "static",
+      "providerEligible": true,
+      "observationIds": ["overlap-ok"]
     },
     {
       "siteRva": "0x569140",

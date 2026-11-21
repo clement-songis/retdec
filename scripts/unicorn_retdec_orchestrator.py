@@ -13,6 +13,9 @@ Commands (relative paths are resolved against --workspace, default: cwd)::
   python3 unicorn_retdec_orchestrator.py request --site-rva 0x100 \
     --proof-type control-flow-target --image image.bin --image-sha256 SHA \
     --output request.json
+  python3 unicorn_retdec_orchestrator.py request --site-rva 0x500 \
+    --proof-type memory-store-target --image image.bin --image-sha256 SHA \
+    --output store-request.json
   python3 unicorn_retdec_orchestrator.py validate --request request.json \
     --response evidence.json --response-sha256 SHA --witness-sha256 SHA \
     --overlay-output overlay.json --output result.json
@@ -25,6 +28,16 @@ Every rejected/incomplete input returns status=unknown, no eligible evidence,
 and no RetDec plan.  An explicitly requested overlay is all-or-nothing for the
 request site and targets: missing, conflicting, zero-fill, or unknown-page
 captures reject the request instead of producing a partial overlay.
+
+``memory-store-target`` is deliberately separate from control flow.  It proves
+only one observed effective address and byte sequence at one store site, using
+at least two distinct runs with bit-exact write captures and replay.  Each
+witness joins an instruction capture to pre/post contexts, exact captured
+target bytes, a write-hook value and a post-write readback.  Unknown pages,
+zero-fill, cross-page accesses without per-page captures, mutable addresses,
+divergent witnesses, incomplete states and invalid proof/hash joins return
+``unknown``.  The RetDec range and optional overlay include only the store
+instruction site, never the data target.
 """
 from __future__ import annotations
 
@@ -48,7 +61,8 @@ WITNESS_FORMAT = "unicornretdec-witness-set-v1"
 MANIFEST_FORMAT = "unicornretdec-proof-manifest-v1"
 EVIDENCE_FORMAT = "retdec-griffin-evidence-v2"
 OVERLAY_FORMAT = "griffin-analysis-overlay-v1"
-PROOF_TYPES = ("control-flow-target", "control-flow-target-set", "stack-role")
+PROOF_TYPES = ("control-flow-target", "control-flow-target-set", "stack-role",
+               "memory-store-target")
 ROLES = ("abi-frame", "vm-register", "vm-spill", "any-proved")
 STACK_SLOT_ROLES = {"unknown", "abi-frame", "vm-register", "vm-spill"}
 CLASSES = {"static", "dynamic-verified", "dynamic-scratch", "ambiguous"}
@@ -59,6 +73,8 @@ MAX_WITNESSES = 256
 MAX_TARGETS = 256
 MAX_OVERLAY_BYTES = 1024 * 1024
 MAX_RETDEC_SPAN = 16 * 1024 * 1024
+MAX_STORE_BYTES = 64
+MIN_STORE_WITNESSES = 2
 STACK_OPERAND = re.compile(
     r"^(call|jmp) qword ptr \[rsp(?: ([+-]) (0x[0-9a-fA-F]+|[0-9]+))?\]$")
 ROLE_FOR_KIND = {
@@ -80,6 +96,18 @@ CAPTURE_ID_KEYS = (
     "run", "seed", "wave", "step", "va", "rva", "instructionBytes",
     "contextSha256", "imageSha256",
 )
+STORE_CAPTURE_ID_KEYS = (
+    "run", "seed", "wave", "step", "siteRva", "effectiveAddress", "size",
+    "writtenSha256", "preWriteContextSha256", "postWriteContextSha256",
+    "imageSha256",
+)
+STORE_OBSERVATION_ID_KEYS = (
+    "run", "seed", "wave", "step", "sourceVa", "sourceRva", "effectiveAddress",
+    "targetAddress", "targetRva", "size", "writtenSha256", "captureId",
+    "instructionCaptureId", "preWriteContextSha256", "postWriteContextSha256",
+    "imageSha256",
+)
+STORE_PROOF_KIND = "bounded-bit-exact-memory-store"
 
 
 class ProofRejected(ValueError):
@@ -140,6 +168,16 @@ def observation_id(observation):
 def instruction_capture_id(capture):
     return sha256_bytes(canonical(
         {key: capture.get(key) for key in CAPTURE_ID_KEYS}).encode())
+
+
+def store_capture_id(capture):
+    return sha256_bytes(canonical(
+        {key: capture.get(key) for key in STORE_CAPTURE_ID_KEYS}).encode())
+
+
+def store_observation_id(observation):
+    return sha256_bytes(canonical(
+        {key: observation.get(key) for key in STORE_OBSERVATION_ID_KEYS}).encode())
 
 
 def proof_hash(proof):
@@ -564,6 +602,367 @@ def _static_direct_target(observation):
         return False
 
 
+def _store_address_reasons(item, image_size, runtime_base):
+    """Validate an observed VA and its optional, explicitly proved image RVA."""
+    reasons = []
+    try:
+        effective = parse_int(item.get("effectiveAddress"))
+        target = parse_int(item.get("targetAddress"))
+        if effective != target or not 0 <= effective <= MASK64:
+            reasons.append("store-effective-target-address-mismatch")
+        size = parse_int(item.get("size"))
+        if not 1 <= size <= MAX_STORE_BYTES or effective + size - 1 > MASK64:
+            reasons.append("store-size-or-address-range-invalid")
+        if (effective & (PAGE - 1)) + size > PAGE:
+            reasons.append("store-access-crosses-page-requires-per-page-captures")
+        target_rva = item.get("targetRva")
+        if target_rva is None:
+            if item.get("targetSpace") != "external-captured-memory":
+                reasons.append("store-external-target-space-not-explicit")
+        else:
+            rva = parse_int(target_rva)
+            if (item.get("targetSpace") != "image"
+                    or not 0 <= rva < image_size or rva + size > image_size
+                    or runtime_base + rva != effective):
+                reasons.append("store-target-rva-runtime-address-mismatch")
+    except (TypeError, ValueError):
+        reasons.append("store-address-or-size-invalid")
+    return reasons
+
+
+def _store_memory_state_reasons(state, phase, address, size, expected_after=None):
+    """Require exact captured bytes for the access, never a synthesized page."""
+    reasons = []
+    if not isinstance(state, dict):
+        return [f"store-{phase}-state-missing"]
+    context = state.get("context")
+    if not isinstance(context, dict):
+        return [f"store-{phase}-context-missing"]
+    if context.get("complete") is not True or context.get("capture") != phase:
+        reasons.append(f"store-{phase}-context-incomplete")
+    if (state.get("contextSha256") != context.get("sha256")
+            or context.get("sha256") != context_hash(context)):
+        reasons.append(f"store-{phase}-context-hash-mismatch")
+    memory = state.get("memory")
+    if not isinstance(memory, dict):
+        return sorted(set(reasons + [f"store-{phase}-memory-capture-missing"]))
+    try:
+        raw = bytes.fromhex(memory.get("data") or "")
+        if (parse_int(memory.get("address")) != address
+                or parse_int(memory.get("size")) != size
+                or len(raw) != size):
+            reasons.append(f"store-{phase}-memory-address-size-or-length-mismatch")
+        if not is_sha256(memory.get("sha256")) or memory.get("sha256") != sha256_bytes(raw):
+            reasons.append(f"store-{phase}-memory-sha256-mismatch")
+        if expected_after is not None and raw != expected_after:
+            reasons.append("store-post-write-readback-differs-from-written-bytes")
+    except (TypeError, ValueError):
+        reasons.append(f"store-{phase}-memory-bytes-invalid")
+        raw = b""
+    provenance = memory.get("provenance")
+    if not isinstance(provenance, dict):
+        reasons.append(f"store-{phase}-memory-provenance-missing")
+        provenance = {}
+    expected_timing = "before-write" if phase == "pre-write" else "after-write"
+    if (provenance.get("captureClass") not in REAL_CAPTURE_CLASSES
+            or provenance.get("timing") != expected_timing
+            or provenance.get("bytesReadFrom") != "emulated-memory"):
+        reasons.append(f"store-{phase}-memory-provenance-invalid")
+    try:
+        page = parse_int(provenance.get("page"))
+        if page != address & ~(PAGE - 1):
+            reasons.append(f"store-{phase}-memory-page-mismatch")
+    except (TypeError, ValueError):
+        reasons.append(f"store-{phase}-memory-page-missing")
+    if (provenance.get("pageKnown") is not True
+            or provenance.get("completeForWrite") is not True
+            or provenance.get("zeroFill") is not False
+            or provenance.get("unknownBytes") != 0
+            or provenance.get("unknownPages")):
+        reasons.append(f"store-{phase}-memory-page-unknown-or-incomplete")
+    if _bad_provenance(canonical(provenance)):
+        reasons.append(f"store-{phase}-memory-zero-fill-or-unknown-provenance")
+    captured = provenance.get("capturedRange") or {}
+    try:
+        if (parse_int(captured.get("address")) != address
+                or parse_int(captured.get("size")) != size
+                or captured.get("sha256") != sha256_bytes(raw)):
+            reasons.append(f"store-{phase}-captured-range-mismatch")
+    except (TypeError, ValueError):
+        reasons.append(f"store-{phase}-captured-range-missing")
+    return sorted(set(reasons))
+
+
+def _store_capture_reasons(capture, instruction_captures, image_sha256,
+                           image_size, runtime_base):
+    reasons = []
+    if capture.get("kind") != "memory-store-capture":
+        reasons.append("store-capture-kind-invalid")
+    if (capture.get("captureClass") not in REAL_CAPTURE_CLASSES
+            or capture.get("imageSha256") != image_sha256):
+        reasons.append("store-capture-class-or-image-invalid")
+    reasons.extend(_store_address_reasons(capture, image_size, runtime_base))
+    try:
+        address = parse_int(capture.get("effectiveAddress"))
+        size = parse_int(capture.get("size"))
+        site_rva = parse_int(capture.get("siteRva"))
+        source_va = parse_int(capture.get("sourceVa"))
+        if not 0 <= site_rva < image_size or source_va != runtime_base + site_rva:
+            reasons.append("store-capture-site-address-mismatch")
+        raw = bytes.fromhex(capture.get("writtenBytes") or "")
+        if len(raw) != size or capture.get("writtenSha256") != sha256_bytes(raw):
+            reasons.append("store-written-bytes-length-or-sha256-mismatch")
+    except (TypeError, ValueError):
+        reasons.append("store-capture-core-fields-invalid")
+        return sorted(set(reasons))
+    reasons.extend(_store_memory_state_reasons(
+        capture.get("preWriteState"), "pre-write", address, size))
+    reasons.extend(_store_memory_state_reasons(
+        capture.get("postWriteState"), "post-write", address, size, raw))
+    pre = capture.get("preWriteState") or {}
+    post = capture.get("postWriteState") or {}
+    if (capture.get("preWriteContextSha256") != pre.get("contextSha256")
+            or capture.get("postWriteContextSha256") != post.get("contextSha256")):
+        reasons.append("store-capture-context-binding-mismatch")
+    instruction = instruction_captures.get(capture.get("instructionCaptureId"))
+    if instruction is None:
+        reasons.append("store-instruction-capture-missing")
+    else:
+        expected = {
+            "run": capture.get("run"), "step": capture.get("step"),
+            "rva": capture.get("siteRva"), "va": capture.get("sourceVa"),
+            "imageSha256": image_sha256,
+            "contextSha256": capture.get("preWriteContextSha256"),
+        }
+        if any(instruction.get(key) != value for key, value in expected.items()):
+            reasons.append("store-instruction-capture-binding-mismatch")
+    replay = capture.get("replay") or {}
+    expected_replay = {
+        "status": "match", "actualEffectiveAddress": capture.get("effectiveAddress"),
+        "actualTargetAddress": capture.get("targetAddress"),
+        "actualTargetRva": capture.get("targetRva"),
+        "actualWrittenBytes": capture.get("writtenBytes"),
+        "actualWrittenSha256": capture.get("writtenSha256"),
+        "preWriteContextSha256": capture.get("preWriteContextSha256"),
+        "postWriteContextSha256": capture.get("postWriteContextSha256"),
+        "missing": [], "error": None,
+    }
+    if any(replay.get(key) != value for key, value in expected_replay.items()):
+        reasons.append("store-replay-missing-incomplete-or-divergent")
+    taint = capture.get("scratch-taint") or {}
+    if taint.get("tainted") or taint.get("unknown") or taint.get("reads"):
+        reasons.append("store-capture-scratch-tainted-or-unknown-page")
+    provenance = capture.get("provenance") or {}
+    if (provenance.get("kind") != "unicorn-memory-write-hook"
+            or provenance.get("addressSource") != "unicorn-write-hook-effective-address"
+            or provenance.get("writtenBytesSource") != "unicorn-write-hook-value"
+            or provenance.get("postWriteBytesSource") != "emulated-memory-readback"
+            or provenance.get("timing") != "pre/post-single-instruction"
+            or provenance.get("zeroFill") is not False
+            or provenance.get("unknownPages")):
+        reasons.append("store-capture-provenance-invalid")
+    if capture.get("captureId") != store_capture_id(capture):
+        reasons.append("store-capture-id-hash-mismatch")
+    return sorted(set(reasons))
+
+
+def _store_observation_reasons(observation, store_captures, instruction_captures,
+                               image_sha256, image_size, runtime_base):
+    reasons = []
+    if (observation.get("kind") != "memory-store"
+            or observation.get("classification") != "dynamic-verified"):
+        reasons.append("store-observation-kind-or-class-invalid")
+    if observation.get("imageSha256") != image_sha256:
+        reasons.append("store-observation-image-hash-mismatch")
+    reasons.extend(_store_address_reasons(observation, image_size, runtime_base))
+    capture = store_captures.get(observation.get("captureId"))
+    if capture is None:
+        reasons.append("store-observation-write-capture-missing")
+    else:
+        bindings = (
+            "run", "seed", "wave", "step", "sourceVa", "sourceRva",
+            "effectiveAddress", "targetAddress", "targetRva", "targetSpace", "size",
+            "writtenBytes", "writtenSha256", "instructionCaptureId",
+            "preWriteContextSha256", "postWriteContextSha256", "imageSha256",
+            "replay", "scratch-taint",
+        )
+        if any(observation.get(key) != capture.get(key) for key in bindings):
+            reasons.append("store-observation-capture-binding-mismatch")
+        if observation.get("sourceRva") != capture.get("siteRva"):
+            reasons.append("store-observation-site-mismatch")
+    if observation.get("observationId") != store_observation_id(observation):
+        reasons.append("store-observation-id-hash-mismatch")
+    return sorted(set(reasons))
+
+
+def validate_store_target(response, site, witnesses):
+    """Prove only the address/bytes observed at one store in independent runs."""
+    reasons = []
+    image_sha = response["image"]["sha256"]
+    model = response["addressModel"]
+    image_size = parse_int(model["imageSize"])
+    runtime_base = parse_int(model["runtimeImageBase"])
+    if (site.get("kind") != "memory-store" or site.get("siteRva") is None
+            or site.get("providerEligible") is not True
+            or site.get("classification") != "dynamic-verified"):
+        reasons.append("store-site-kind-class-or-eligibility-invalid")
+    reasons.extend(_store_address_reasons(site, image_size, runtime_base))
+    try:
+        size = parse_int(site.get("size"))
+        raw = bytes.fromhex(site.get("writtenBytes") or "")
+        if len(raw) != size or site.get("writtenSha256") != sha256_bytes(raw):
+            reasons.append("store-site-written-bytes-length-or-sha256-mismatch")
+    except (TypeError, ValueError):
+        reasons.append("store-site-written-bytes-invalid")
+        raw = None
+    if not MIN_STORE_WITNESSES <= len(witnesses) <= MAX_WITNESSES:
+        reasons.append("store-requires-at-least-two-independent-witnesses")
+    ids = [item.get("observationId") for item in witnesses]
+    capture_ids = [item.get("captureId") for item in witnesses]
+    runs = [item.get("run") for item in witnesses]
+    if len(set(ids)) != len(ids) or len(set(capture_ids)) != len(capture_ids):
+        reasons.append("store-witness-or-capture-not-distinct")
+    if len(set(runs)) != len(runs):
+        reasons.append("store-witnesses-are-not-independent-runs")
+    store_captures = {item.get("captureId"): item
+                      for item in response.get("memoryStoreCaptures") or []}
+    instruction_captures = {item.get("captureId"): item
+                            for item in response.get("instructionCaptures") or []}
+    for witness in witnesses:
+        witness_reasons = _store_observation_reasons(
+            witness, store_captures, instruction_captures, image_sha, image_size, runtime_base)
+        reasons.extend(witness_reasons)
+        bindings = (
+            "sourceRva", "effectiveAddress", "targetAddress", "targetRva",
+            "targetSpace", "size", "writtenBytes", "writtenSha256", "imageSha256",
+        )
+        site_values = {key: site.get(key) for key in bindings}
+        site_values["sourceRva"] = site.get("siteRva")
+        if any(witness.get(key) != site_values[key] for key in bindings):
+            reasons.append("store-site-witness-address-bytes-or-site-mismatch")
+        capture = store_captures.get(witness.get("captureId"))
+        if capture is not None:
+            reasons.extend(_store_capture_reasons(
+                capture, instruction_captures, image_sha, image_size, runtime_base))
+    proof = site.get("storeTargetProof")
+    if not isinstance(proof, dict) or not proof:
+        reasons.append("explicit-store-target-proof-missing")
+        proof = {}
+    if proof.get("status") != "proved" or proof.get("kind") != STORE_PROOF_KIND:
+        reasons.append("store-target-proof-status-or-kind-invalid")
+    expected_proof = {
+        "imageSha256": image_sha, "siteRva": site.get("siteRva"),
+        "effectiveAddress": site.get("effectiveAddress"),
+        "targetAddress": site.get("targetAddress"), "targetRva": site.get("targetRva"),
+        "targetSpace": site.get("targetSpace"), "size": site.get("size"),
+        "writtenBytes": site.get("writtenBytes"),
+        "writtenSha256": site.get("writtenSha256"),
+        "observationIds": sorted(ids), "captureIds": sorted(capture_ids),
+    }
+    for key, expected in expected_proof.items():
+        if proof.get(key) != expected:
+            reasons.append(f"store-proof-{key}-mismatch")
+    pre_states = []
+    for observation_id in sorted(ids):
+        witness = next((item for item in witnesses
+                        if item.get("observationId") == observation_id), {})
+        capture = store_captures.get(witness.get("captureId")) or {}
+        memory = (capture.get("preWriteState") or {}).get("memory") or {}
+        pre_states.append({
+            "observationId": observation_id, "captureId": witness.get("captureId"),
+            "contextSha256": witness.get("preWriteContextSha256"),
+            "memorySha256": memory.get("sha256"),
+        })
+    if proof.get("preWriteStates") != pre_states:
+        reasons.append("store-proof-pre-write-states-mismatch")
+    evidence = proof.get("evidence")
+    if not isinstance(evidence, dict):
+        reasons.append("store-target-proof-evidence-missing")
+        evidence = {}
+    if (evidence.get("captureClass") not in REAL_CAPTURE_CLASSES
+            or evidence.get("addressSource") != "unicorn-write-hook-effective-address"
+            or evidence.get("scope") != "selected-independent-write-replays-only"
+            or evidence.get("independentRunCount") != len(set(runs))
+            or evidence.get("preWriteStateRequired") is not True
+            or evidence.get("postWriteReadbackRequired") is not True
+            or evidence.get("pagePolicy") != "captured-access-range-only-no-zero-fill"):
+        reasons.append("store-target-proof-evidence-incomplete")
+    if proof.get("proofSha256") != proof_hash(proof):
+        reasons.append("store-target-proof-hash-mismatch")
+    if reasons:
+        return None, sorted(set(reasons))
+    return {
+        "proofType": "memory-store-target", "siteRva": site["siteRva"],
+        "kind": "memory-store", "proofKind": STORE_PROOF_KIND,
+        "classification": "dynamic-verified", "providerEligible": True,
+        "effectiveAddress": site["effectiveAddress"],
+        "targetAddress": site["targetAddress"], "targetRva": site.get("targetRva"),
+        "targetSpace": site["targetSpace"], "size": site["size"],
+        "writtenBytes": site["writtenBytes"], "writtenSha256": site["writtenSha256"],
+        "captureIds": sorted(capture_ids), "preWriteStates": pre_states,
+        "storeTargetProofSha256": proof.get("proofSha256"), "imageSha256": image_sha,
+        "witnessObservationIds": sorted(ids),
+        "providerEffect": ("bounded store-site annotation only; memory target is data, "
+                           "never a control-flow target or function boundary"),
+    }, []
+
+
+def audit_memory_stores(response, instruction_captures, image_sha256,
+                        image_size, runtime_base):
+    violations = []
+    captures = response.get("memoryStoreCaptures") or []
+    captures_by_id = {}
+    for index, capture in enumerate(captures):
+        cid = capture.get("captureId") or f"store-capture-index-{index}"
+        if cid in captures_by_id:
+            violations.append(f"{cid}:duplicate-store-capture-id")
+        captures_by_id[cid] = capture
+        for reason in _store_capture_reasons(
+                capture, instruction_captures, image_sha256, image_size, runtime_base):
+            violations.append(f"{cid}:{reason}")
+    observations = response.get("memoryStoreObservations") or []
+    by_id = {}
+    for index, observation in enumerate(observations):
+        oid = observation.get("observationId") or f"store-index-{index}"
+        if oid in by_id:
+            violations.append(f"{oid}:duplicate-store-observation-id")
+        by_id[oid] = observation
+        for reason in _store_observation_reasons(
+                observation, captures_by_id, instruction_captures,
+                image_sha256, image_size, runtime_base):
+            violations.append(f"{oid}:{reason}")
+    sites = response.get("memoryStoreSites") or []
+    seen_sites, eligible = set(), 0
+    for site in sites:
+        sid = site.get("siteRva")
+        if sid in seen_sites:
+            violations.append(f"store-site-{sid}:duplicate-site")
+        seen_sites.add(sid)
+        ids = site.get("observationIds") or []
+        if not ids or len(ids) != len(set(ids)) or any(oid not in by_id for oid in ids):
+            violations.append(f"store-site-{sid}:observation-join-incomplete")
+            continue
+        selected = [by_id[oid] for oid in ids]
+        if len(selected) > MAX_WITNESSES:
+            violations.append(f"store-site-{sid}:witness-limit-exceeded")
+        if site.get("providerEligible") is True or site.get("storeTargetProof") is not None:
+            _, reasons = validate_store_target(response, site, selected)
+            violations.extend(f"store-site-{sid}:{reason}" for reason in reasons)
+        if site.get("providerEligible") is True:
+            eligible += 1
+    summary = response.get("memoryStoreSummary")
+    if summary is not None:
+        if (summary.get("observations") != len(observations)
+                or summary.get("captures") != len(captures)
+                or summary.get("providerEligibleSites") != eligible):
+            violations.append("memoryStoreSummary-mismatch")
+    return {
+        "violations": sorted(set(violations)), "observations": len(observations),
+        "captures": len(captures), "sites": len(seen_sites),
+        "providerEligibleSites": eligible,
+    }
+
+
 def audit_sidecar(response, image_sha256, image_path=None):
     """Dependency-free global audit; malformed input is never provider evidence.
 
@@ -760,11 +1159,19 @@ def audit_sidecar(response, image_sha256, image_path=None):
         violations.append("summary-providerEligibleSites-mismatch")
     if summary.get("observations") != len(observations):
         violations.append("summary-observations-mismatch")
+    store_audit = audit_memory_stores(
+        response, captures_by_id, image_sha256, image_size,
+        parse_int(model["runtimeImageBase"]))
+    violations.extend(store_audit["violations"])
     return {
         "status": "pass" if not violations else "fail",
         "observations": len(observations), "sites": len(seen_sites),
         "instructionCaptures": len(captures),
         "providerEligibleSites": eligible_count,
+        "memoryStoreObservations": store_audit["observations"],
+        "memoryStoreCaptures": store_audit["captures"],
+        "memoryStoreSites": store_audit["sites"],
+        "providerEligibleMemoryStoreSites": store_audit["providerEligibleSites"],
         "observationClasses": dict(sorted(collections.Counter(
             item.get("classification") for item in observations).items())),
         "violations": sorted(set(violations)),
@@ -815,6 +1222,13 @@ def make_request(site_rva, proof_type, image, image_sha256, *,
             "chunker": str(chunker), "outputDir": str(output_dir),
         },
     }
+    if proof_type == "memory-store-target":
+        core["constraints"].update({
+            "minStoreWitnesses": MIN_STORE_WITNESSES,
+            "maxStoreBytes": MAX_STORE_BYTES,
+            "storeTargetInDynamicBasicBlockEntries": False,
+            "storeOverlayScope": "instruction-site-only",
+        })
     core["requestId"] = "ur-" + sha256_bytes(canonical(core).encode())[:24]
     return core
 
@@ -841,12 +1255,15 @@ def unknown_result(request, response_path, reasons, *, response_sha256=None,
 
 
 def select_site_and_witnesses(request, response):
-    sites = [site for site in response.get("controlFlowSites") or []
+    store_request = request.get("proofType") == "memory-store-target"
+    site_key = "memoryStoreSites" if store_request else "controlFlowSites"
+    observation_key = "memoryStoreObservations" if store_request else "observations"
+    sites = [site for site in response.get(site_key) or []
              if site.get("siteRva") == request["siteRva"]]
     if len(sites) != 1:
         return None, [], ["requested-site-missing-or-duplicated"]
     site = sites[0]
-    observations = response.get("observations") or []
+    observations = response.get(observation_key) or []
     ids_list = [item.get("observationId") for item in observations]
     if len(ids_list) != len(set(ids_list)):
         return site, [], ["response-observation-ids-duplicated"]
@@ -1033,7 +1450,7 @@ def _overlay_entry(rva, captures, image_sha):
 
 def bounded_overlay(response, response_sha256, evidence):
     wanted = {evidence["siteRva"], *(evidence.get("targets") or [])}
-    if evidence.get("proofType") == "stack-role":
+    if evidence.get("proofType") in {"stack-role", "memory-store-target"}:
         wanted = {evidence["siteRva"]}
     captures = list(response.get("instructionCaptures") or [])
     if not captures:
@@ -1132,7 +1549,7 @@ def validate_overlay(payload, image_path, image_sha256):
 
 
 def witness_descriptor(observation):
-    return {
+    descriptor = {
         "observationId": observation.get("observationId"), "run": observation.get("run"),
         "sourceRva": observation.get("sourceRva"), "targetRva": observation.get("targetRva"),
         "contextSha256": observation.get("contextSha256"),
@@ -1141,12 +1558,25 @@ def witness_descriptor(observation):
                               if observation.get("instructionBytes") else None),
         "observationSha256": sha256_bytes(canonical(observation).encode()),
     }
+    if observation.get("kind") == "memory-store":
+        descriptor.update({
+            "kind": "memory-store", "captureId": observation.get("captureId"),
+            "effectiveAddress": observation.get("effectiveAddress"),
+            "targetAddress": observation.get("targetAddress"),
+            "size": observation.get("size"),
+            "writtenBytes": observation.get("writtenBytes"),
+            "writtenSha256": observation.get("writtenSha256"),
+            "preWriteContextSha256": observation.get("preWriteContextSha256"),
+            "postWriteContextSha256": observation.get("postWriteContextSha256"),
+        })
+    return descriptor
 
 
 def make_retdec_plan(request, response, response_path, response_sha256, evidence, *,
                      overlay_path=None, overlay_sha256=None, workspace=None):
     workspace = workspace or Path.cwd()
-    rvas = ([evidence["siteRva"]] if evidence.get("proofType") == "stack-role"
+    rvas = ([evidence["siteRva"]]
+            if evidence.get("proofType") in {"stack-role", "memory-store-target"}
             else [evidence["siteRva"], *(evidence.get("targets") or [])])
     values = [parse_int(item) for item in rvas]
     lo = min(values) & ~(PAGE - 1)
@@ -1178,6 +1608,8 @@ def make_retdec_plan(request, response, response_path, response_sha256, evidence
         command += ["--griffin-overlay", path_reference(Path(overlay_path), workspace)]
     capture_ids = sorted({item.get("instructionCaptureId") for item in evidence["witnesses"]
                           if item.get("instructionCaptureId")})
+    store_capture_ids = sorted({item.get("captureId") for item in evidence["witnesses"]
+                                if item.get("kind") == "memory-store" and item.get("captureId")})
     manifest = {
         "format": MANIFEST_FORMAT, "requestId": request["requestId"],
         "siteRva": request["siteRva"], "proofType": request["proofType"],
@@ -1186,6 +1618,7 @@ def make_retdec_plan(request, response, response_path, response_sha256, evidence
         "witnessSetSha256": evidence["witnessSetSha256"],
         "observationIds": sorted(item["observationId"] for item in evidence["witnesses"]),
         "captureIds": capture_ids,
+        "storeCaptureIds": store_capture_ids,
         "maxRetdecSpan": MAX_RETDEC_SPAN,
         "runtimeImageBase": jint(runtime_base),
     }
@@ -1270,12 +1703,25 @@ def _validate_response(request, response_path, response_sha256, witness_sha256, 
         reasons.append("witness-set-sha256-mismatch")
     captures = {item.get("captureId"): item
                 for item in response.get("instructionCaptures") or []}
+    store_captures = {item.get("captureId"): item
+                      for item in response.get("memoryStoreCaptures") or []}
     for observation in witnesses:
-        reasons.extend(no_zero_fill_reasons(
-            observation, captures.get(observation.get("instructionCaptureId"))))
+        if observation.get("kind") == "memory-store":
+            store_capture = store_captures.get(observation.get("captureId")) or {}
+            pre_context = (store_capture.get("preWriteState") or {}).get("context") or {}
+            reasons.extend(no_zero_fill_reasons(
+                {"context": pre_context,
+                 "scratch-taint": observation.get("scratch-taint") or {},
+                 "replay": observation.get("replay") or {}},
+                captures.get(observation.get("instructionCaptureId"))))
+            expected_observation_id = store_observation_id(observation)
+        else:
+            reasons.extend(no_zero_fill_reasons(
+                observation, captures.get(observation.get("instructionCaptureId"))))
+            expected_observation_id = observation_id(observation)
         if observation.get("imageSha256") != actual_image_sha:
             reasons.append("witness-image-sha256-mismatch")
-        if observation.get("observationId") != observation_id(observation):
+        if observation.get("observationId") != expected_observation_id:
             reasons.append("witness-observation-id-mismatch")
     if reasons:
         return unknown_result(request, response_path, reasons,
@@ -1287,9 +1733,11 @@ def _validate_response(request, response_path, response_sha256, witness_sha256, 
         evidence, proof_reasons = validate_single_target(response, site, witnesses)
     elif proof_type == "control-flow-target-set":
         evidence, proof_reasons = validate_target_set(response, site, witnesses)
-    else:
+    elif proof_type == "stack-role":
         evidence, proof_reasons = validate_stack_role(
             response, site, witnesses, request.get("requestedRole") or "any-proved")
+    else:
+        evidence, proof_reasons = validate_store_target(response, site, witnesses)
     if proof_reasons:
         return unknown_result(request, response_path, proof_reasons,
                               response_sha256=actual_response_sha,
@@ -1407,6 +1855,151 @@ def _refresh_summary(response):
         "observationClasses": dict(sorted(collections.Counter(
             item["classification"] for item in observations).items())),
     }
+    if "memoryStoreSites" in response:
+        store_sites = response.get("memoryStoreSites") or []
+        response["memoryStoreSummary"] = {
+            "observations": len(response.get("memoryStoreObservations") or []),
+            "captures": len(response.get("memoryStoreCaptures") or []),
+            "providerEligibleSites": len([
+                site for site in store_sites if site.get("providerEligible") is True]),
+        }
+
+
+def _store_test_state(phase, address, size, data, source_va):
+    raw = bytes.fromhex(data)
+    memory = {
+        "address": jint(address), "size": size, "data": data,
+        "sha256": sha256_bytes(raw),
+        "provenance": {
+            "kind": "captured-memory-range", "captureClass": "emulated-real-input",
+            "timing": "before-write" if phase == "pre-write" else "after-write",
+            "bytesReadFrom": "emulated-memory", "page": jint(address & ~(PAGE - 1)),
+            "pageOrigin": "checkpoint-captured-object", "pageKnown": True,
+            "completeForWrite": True, "zeroFill": False, "unknownBytes": 0,
+            "unknownPages": [],
+            "capturedRange": {"address": jint(address), "size": size,
+                              "sha256": sha256_bytes(raw)},
+        },
+    }
+    context = {
+        "capture": phase, "complete": True,
+        "registers": {"rsp": "0x7000", "rip": jint(source_va),
+                      "rax": jint(address)},
+        "memory": [memory],
+    }
+    context["sha256"] = context_hash(context)
+    return {"context": context, "contextSha256": context["sha256"], "memory": memory}
+
+
+def make_synthetic_store(image_sha, base):
+    """Two independent, identical writes; no Unicorn execution or real sample."""
+    observations, captures, instruction_captures = [], [], []
+
+    def add(run, step, before):
+        site_rva, target_rva, size = 0x500, 0x3000, 4
+        source_va, address = base + site_rva, base + target_rva
+        written = "78563412"
+        pre = _store_test_state("pre-write", address, size, before, source_va)
+        post = _store_test_state("post-write", address, size, written, source_va + 2)
+        template = {
+            "run": run, "seed": "0x1", "wave": 1, "step": step,
+            "sourceVa": jint(source_va), "sourceRva": jint(site_rva),
+            "targetVa": jint(address), "targetRva": jint(target_rva),
+            "mnemonic": "mov", "text": "mov dword ptr [rax], ecx",
+            "instructionSize": 2, "instructionBytes": "8908",
+            "runtimeImageBase": jint(base), "imageSha256": image_sha,
+            "context": pre["context"], "contextSha256": pre["contextSha256"],
+            "scratch-taint": {"tainted": False, "unknown": False, "reads": [], "events": []},
+        }
+        instruction = _test_capture(template, image_sha)
+        replay = {
+            "status": "match", "actualEffectiveAddress": jint(address),
+            "actualTargetAddress": jint(address), "actualTargetRva": jint(target_rva),
+            "actualWrittenBytes": written, "actualWrittenSha256": sha256_bytes(bytes.fromhex(written)),
+            "preWriteContextSha256": pre["contextSha256"],
+            "postWriteContextSha256": post["contextSha256"], "missing": [], "error": None,
+        }
+        capture = {
+            "kind": "memory-store-capture", "captureClass": "emulated-real-input",
+            "run": run, "seed": "0x1", "wave": 1, "step": step,
+            "siteRva": jint(site_rva), "sourceVa": jint(source_va),
+            "sourceRva": jint(site_rva), "runtimeImageBase": jint(base),
+            "effectiveAddress": jint(address), "targetAddress": jint(address),
+            "targetRva": jint(target_rva), "targetSpace": "image", "size": size,
+            "writtenBytes": written, "writtenSha256": sha256_bytes(bytes.fromhex(written)),
+            "instructionCaptureId": instruction["captureId"],
+            "preWriteState": pre, "postWriteState": post,
+            "preWriteContextSha256": pre["contextSha256"],
+            "postWriteContextSha256": post["contextSha256"],
+            "replay": replay, "scratch-taint": template["scratch-taint"],
+            "imageSha256": image_sha,
+            "provenance": {
+                "kind": "unicorn-memory-write-hook",
+                "addressSource": "unicorn-write-hook-effective-address",
+                "writtenBytesSource": "unicorn-write-hook-value",
+                "postWriteBytesSource": "emulated-memory-readback",
+                "timing": "pre/post-single-instruction", "zeroFill": False,
+                "unknownPages": [],
+            },
+        }
+        capture["captureId"] = store_capture_id(capture)
+        observation = {
+            key: copy.deepcopy(capture[key]) for key in (
+                "run", "seed", "wave", "step", "sourceVa", "sourceRva",
+                "runtimeImageBase", "effectiveAddress", "targetAddress", "targetRva",
+                "targetSpace", "size", "writtenBytes", "writtenSha256",
+                "instructionCaptureId", "preWriteContextSha256", "postWriteContextSha256",
+                "replay", "scratch-taint", "imageSha256")
+        }
+        observation.update({"kind": "memory-store", "classification": "dynamic-verified",
+                            "captureId": capture["captureId"]})
+        observation["observationId"] = store_observation_id(observation)
+        capture["observationId"] = observation["observationId"]
+        instruction["transferObservationId"] = observation["observationId"]
+        observations.append(observation)
+        captures.append(capture)
+        instruction_captures.append(instruction)
+
+    add("store-run-a", 2001, "11111111")
+    add("store-run-b", 2002, "22222222")
+    ordered = sorted(observations, key=lambda item: item["observationId"])
+    capture_by_id = {item["captureId"]: item for item in captures}
+    pre_states = [{
+        "observationId": item["observationId"], "captureId": item["captureId"],
+        "contextSha256": item["preWriteContextSha256"],
+        "memorySha256": capture_by_id[item["captureId"]]["preWriteState"]["memory"]["sha256"],
+    } for item in ordered]
+    first = ordered[0]
+    site = {
+        "siteRva": first["sourceRva"], "kind": "memory-store",
+        "classification": "dynamic-verified", "providerEligible": True,
+        "imageSha256": image_sha,
+        "effectiveAddress": first["effectiveAddress"],
+        "targetAddress": first["targetAddress"], "targetRva": first["targetRva"],
+        "targetSpace": first["targetSpace"], "size": first["size"],
+        "writtenBytes": first["writtenBytes"], "writtenSha256": first["writtenSha256"],
+        "observationIds": [item["observationId"] for item in ordered],
+    }
+    proof = {
+        "status": "proved", "kind": STORE_PROOF_KIND, "imageSha256": image_sha,
+        "siteRva": site["siteRva"], "effectiveAddress": site["effectiveAddress"],
+        "targetAddress": site["targetAddress"], "targetRva": site["targetRva"],
+        "targetSpace": site["targetSpace"], "size": site["size"],
+        "writtenBytes": site["writtenBytes"], "writtenSha256": site["writtenSha256"],
+        "observationIds": site["observationIds"],
+        "captureIds": sorted(item["captureId"] for item in ordered),
+        "preWriteStates": pre_states,
+        "evidence": {
+            "captureClass": "emulated-real-input",
+            "addressSource": "unicorn-write-hook-effective-address",
+            "scope": "selected-independent-write-replays-only", "independentRunCount": 2,
+            "preWriteStateRequired": True, "postWriteReadbackRequired": True,
+            "pagePolicy": "captured-access-range-only-no-zero-fill",
+        },
+    }
+    proof["proofSha256"] = proof_hash(proof)
+    site["storeTargetProof"] = proof
+    return site, observations, captures, instruction_captures
 
 
 def make_synthetic_response(image_path, workspace):
@@ -1519,6 +2112,9 @@ def make_synthetic_response(image_path, workspace):
                   "targetRva": role["targetRva"], "targets": [role["targetRva"]],
                   "classification": "dynamic-verified", "providerEligible": True,
                   "observationIds": [role["observationId"]], "stackTrampolineEvidence": None})
+    store_site, store_observations, store_captures, store_instructions = make_synthetic_store(
+        image_sha, base)
+    captures.extend(store_instructions)
     response = {
         "format": EVIDENCE_FORMAT,
         "addressModel": {"key": "RVA", "staticImageBase": jint(base),
@@ -1530,6 +2126,9 @@ def make_synthetic_response(image_path, workspace):
         "source": {"kind": "inline-synthetic-selftest"},
         "observations": observations, "instructionCaptures": captures,
         "controlFlowSites": sites,
+        "memoryStoreSites": [store_site],
+        "memoryStoreObservations": store_observations,
+        "memoryStoreCaptures": store_captures,
     }
     _refresh_summary(response)
     return response
@@ -1554,13 +2153,17 @@ def run_self_tests(output_dir=None):
 
     def record(name, result, expected_reason=None):
         check(result["status"] in {"accepted", "unknown"}, name + ":verdict")
+        source_violations = ((result.get("sourceAudit") or {}).get("violations") or [])
         if result["status"] == "unknown":
             check(not result["eligibleEvidence"] and result["retdecPlan"] is None,
                   name + ":fail-closed")
             if expected_reason:
-                check(expected_reason in result["reasons"], name + ":reason")
+                diagnostics = result["reasons"] + source_violations
+                check(any(expected_reason == item or expected_reason in item
+                          for item in diagnostics), name + ":reason")
         cases.append({"name": name, "status": result["status"],
                       "reasons": result["reasons"],
+                      "sourceViolations": source_violations,
                       "eligibleEvidence": len(result["eligibleEvidence"]),
                       "retdecCommandPlanned": result["retdecPlan"] is not None})
 
@@ -1632,6 +2235,31 @@ def run_self_tests(output_dir=None):
         check(role_result["eligibleEvidence"][0]["role"] == "vm-spill", "vm-spill proof")
         record("accepted-explicit-vm-spill-role-proof", role_result)
 
+        store_site = response["memoryStoreSites"][0]
+        base = parse_int(response["addressModel"]["runtimeImageBase"])
+        store_witnesses = [item for item in response["memoryStoreObservations"]
+                           if item["observationId"] in store_site["observationIds"]]
+        store_request = _request_for(response, image_path, workspace, "0x500",
+                                     "memory-store-target")
+        store_overlay_path = workspace / "store.overlay.json"
+        store_result = validate_response(
+            store_request, response_path, response_sha, witness_set_sha256(store_witnesses),
+            overlay_path=store_overlay_path, workspace=workspace)
+        check(store_result["status"] == "accepted", "accepted store: " + repr(store_result))
+        store_evidence = store_result["eligibleEvidence"][0]
+        check(store_evidence["effectiveAddress"] == jint(base + 0x3000), "store effective address")
+        check(store_evidence["writtenBytes"] == "78563412", "store written bytes")
+        check(len(store_evidence["captureIds"]) == 2, "store captureIds")
+        check(len(store_evidence["preWriteStates"]) == 2, "store pre-write states")
+        check(store_result["retdecPlan"]["selectedRangeRva"] == "0x0-0x1000",
+              "store plan bounded to instruction site")
+        store_overlay = load_json(store_overlay_path)
+        check({item["rva"] for item in store_overlay["entries"]} == {"0x500"},
+              "store overlay excludes data target")
+        check(len(store_result["proofManifest"]["storeCaptureIds"]) == 2,
+              "store manifest captures")
+        record("accepted-bit-exact-memory-store-target", store_result)
+
         bad_image_request = copy.deepcopy(request)
         bad_image_request["image"]["sha256"] = "0" * 64
         bad_image = validate_response(bad_image_request, response_path, response_sha, witness_sha,
@@ -1690,6 +2318,142 @@ def run_self_tests(output_dir=None):
         mutated_result("rejected-missing-role-proof", missing_role, req=role_request,
                        expected="explicit-role-proof-missing")
 
+        def refresh_store_proof(changed):
+            """Keep mutations internally consistent so tests hit the intended rule."""
+            for observation in changed["memoryStoreObservations"]:
+                capture = next(item for item in changed["memoryStoreCaptures"]
+                               if item["captureId"] == observation["captureId"])
+                for key in ("preWriteState", "postWriteState"):
+                    state = capture[key]
+                    memory = state["memory"]
+                    raw = bytes.fromhex(memory["data"])
+                    memory["sha256"] = sha256_bytes(raw)
+                    memory["provenance"]["capturedRange"]["sha256"] = memory["sha256"]
+                    state["context"]["memory"][0] = memory
+                    state["context"]["sha256"] = context_hash(state["context"])
+                    state["contextSha256"] = state["context"]["sha256"]
+                capture["preWriteContextSha256"] = capture["preWriteState"]["contextSha256"]
+                capture["postWriteContextSha256"] = capture["postWriteState"]["contextSha256"]
+                capture["replay"]["preWriteContextSha256"] = capture["preWriteContextSha256"]
+                capture["replay"]["postWriteContextSha256"] = capture["postWriteContextSha256"]
+                instruction = next(item for item in changed["instructionCaptures"]
+                                   if item["captureId"] == capture["instructionCaptureId"])
+                instruction["context"] = copy.deepcopy(capture["preWriteState"]["context"])
+                instruction["contextSha256"] = capture["preWriteContextSha256"]
+                instruction["provenance"]["contextSha256"] = capture["preWriteContextSha256"]
+                instruction["captureId"] = instruction_capture_id(instruction)
+                capture["instructionCaptureId"] = instruction["captureId"]
+                capture["captureId"] = store_capture_id(capture)
+                for key in (
+                        "effectiveAddress", "targetAddress", "targetRva", "targetSpace",
+                        "writtenBytes", "writtenSha256", "instructionCaptureId",
+                        "preWriteContextSha256", "postWriteContextSha256", "replay"):
+                    observation[key] = copy.deepcopy(capture[key])
+                observation["captureId"] = capture["captureId"]
+                observation["observationId"] = store_observation_id(observation)
+                capture["observationId"] = observation["observationId"]
+                instruction["transferObservationId"] = observation["observationId"]
+            site = changed["memoryStoreSites"][0]
+            ordered = sorted(changed["memoryStoreObservations"],
+                             key=lambda item: item["observationId"])
+            capture_by_id = {item["captureId"]: item
+                             for item in changed["memoryStoreCaptures"]}
+            site["observationIds"] = [item["observationId"] for item in ordered]
+            proof = site["storeTargetProof"]
+            proof["observationIds"] = site["observationIds"]
+            proof["captureIds"] = sorted(item["captureId"] for item in ordered)
+            proof["preWriteStates"] = [{
+                "observationId": item["observationId"], "captureId": item["captureId"],
+                "contextSha256": item["preWriteContextSha256"],
+                "memorySha256": capture_by_id[item["captureId"]]
+                    ["preWriteState"]["memory"]["sha256"],
+            } for item in ordered]
+            proof["proofSha256"] = proof_hash(proof)
+
+        def mutable_store_address(changed):
+            observation = changed["memoryStoreObservations"][1]
+            capture = next(item for item in changed["memoryStoreCaptures"]
+                           if item["captureId"] == observation["captureId"])
+            address = parse_int(capture["effectiveAddress"]) + 0x10
+            rva = parse_int(capture["targetRva"]) + 0x10
+            for key, value in (("effectiveAddress", jint(address)),
+                               ("targetAddress", jint(address)), ("targetRva", jint(rva))):
+                capture[key] = value
+            capture["replay"].update(actualEffectiveAddress=jint(address),
+                                     actualTargetAddress=jint(address), actualTargetRva=jint(rva))
+            for key in ("preWriteState", "postWriteState"):
+                state = capture[key]
+                state["memory"]["address"] = jint(address)
+                state["memory"]["provenance"]["capturedRange"]["address"] = jint(address)
+                state["context"]["registers"]["rax"] = jint(address)
+            refresh_store_proof(changed)
+        mutated_result("rejected-mutable-store-address", mutable_store_address,
+                       req=store_request, expected="store-site-witness-address-bytes-or-site-mismatch")
+
+        def different_store_witness(changed):
+            proof = changed["memoryStoreSites"][0]["storeTargetProof"]
+            proof["observationIds"] = [proof["observationIds"][0],
+                                       proof["observationIds"][0]]
+            proof["proofSha256"] = proof_hash(proof)
+        mutated_result("rejected-different-store-witness", different_store_witness,
+                       req=store_request, expected="store-proof-observationIds-mismatch")
+
+        def unknown_store_page(changed):
+            capture = changed["memoryStoreCaptures"][1]
+            provenance = capture["preWriteState"]["memory"]["provenance"]
+            provenance.update(pageKnown=False, pageOrigin="unknown-page",
+                              unknownPages=[provenance["page"]])
+            refresh_store_proof(changed)
+        mutated_result("rejected-store-unknown-page", unknown_store_page,
+                       req=store_request, expected="store-pre-write-memory-page-unknown-or-incomplete")
+
+        def zero_fill_store_page(changed):
+            capture = changed["memoryStoreCaptures"][0]
+            provenance = capture["postWriteState"]["memory"]["provenance"]
+            provenance.update(pageOrigin="zero-fill", zeroFill=True)
+            refresh_store_proof(changed)
+        mutated_result("rejected-store-zero-fill-page", zero_fill_store_page,
+                       req=store_request, expected="store-post-write-memory-page-unknown-or-incomplete")
+
+        def incomplete_store_pre_state(changed):
+            changed["memoryStoreCaptures"][0]["preWriteState"]["context"]["complete"] = False
+            refresh_store_proof(changed)
+        mutated_result("rejected-store-incomplete-pre-write-state", incomplete_store_pre_state,
+                       req=store_request, expected="store-pre-write-context-incomplete")
+
+        def divergent_store_readback(changed):
+            state = changed["memoryStoreCaptures"][0]["postWriteState"]
+            state["memory"]["data"] = "00000000"
+            state["context"]["memory"][0]["data"] = "00000000"
+            refresh_store_proof(changed)
+        mutated_result("rejected-store-post-write-readback-mismatch", divergent_store_readback,
+                       req=store_request,
+                       expected="store-post-write-readback-differs-from-written-bytes")
+
+        def single_store_witness(changed):
+            site = changed["memoryStoreSites"][0]
+            keep = site["observationIds"][0]
+            site["observationIds"] = [keep]
+            proof = site["storeTargetProof"]
+            proof["observationIds"] = [keep]
+            capture_id = next(item["captureId"] for item in changed["memoryStoreObservations"]
+                              if item["observationId"] == keep)
+            proof["captureIds"] = [capture_id]
+            proof["preWriteStates"] = [item for item in proof["preWriteStates"]
+                                       if item["observationId"] == keep]
+            proof["evidence"]["independentRunCount"] = 1
+            proof["proofSha256"] = proof_hash(proof)
+        mutated_result("rejected-store-single-witness", single_store_witness,
+                       req=store_request,
+                       expected="store-requires-at-least-two-independent-witnesses")
+
+        def incomplete_store_proof(changed):
+            proof = changed["memoryStoreSites"][0]["storeTargetProof"]
+            proof.pop("preWriteStates")
+            proof["proofSha256"] = proof_hash(proof)
+        mutated_result("rejected-store-incomplete-proof", incomplete_store_proof,
+                       req=store_request, expected="store-proof-pre-write-states-mismatch")
+
         def conflicting_overlay(item):
             target_capture = next(c for c in item["instructionCaptures"]
                                   if c["rva"] == "0x2000")
@@ -1741,10 +2505,10 @@ def run_self_tests(output_dir=None):
 
         if output_dir is not None:
             output_dir = Path(output_dir)
-            save_json(output_dir / "vgk_agent_URINTEGRATE_request.json", request)
-            save_json(output_dir / "vgk_agent_URINTEGRATE_accepted.json", accepted)
-            save_json(output_dir / "vgk_agent_URINTEGRATE_plan.json", accepted["retdecPlan"])
-            save_json(output_dir / "vgk_agent_URINTEGRATE_overlay.json", overlay)
+            save_json(output_dir / "vgk_agent_STORETARGET_request.json", request)
+            save_json(output_dir / "vgk_agent_STORETARGET_accepted.json", accepted)
+            save_json(output_dir / "vgk_agent_STORETARGET_plan.json", accepted["retdecPlan"])
+            save_json(output_dir / "vgk_agent_STORETARGET_overlay.json", overlay)
 
     return {
         "format": "unicornretdec-portable-selftest-v1", "status": "pass",
@@ -1755,12 +2519,16 @@ def run_self_tests(output_dir=None):
             "accepted singleton, complete target set, and explicit vm-spill roleProof",
             "image/response/witness SHA256 rejection and deterministic artifacts",
             "unknown pages, zero-fill pages, incomplete replay/proofs, missing/conflicting overlay captures",
+            "accepted two-run memory-store-target with exact VA/RVA, bytes, captureIds and pre/post states",
+            "mutable store address, different witness, single witness, incomplete proof/pre-state, bad readback",
+            "store-specific unknown/zero-fill pages and site-only RetDec range/overlay",
             "copy-as-scripts/unicorn_retdec_orchestrator.py from an unrelated cwd",
         ],
         "limitations": [
             "Synthetic fixtures validate orchestration logic, not Unicorn semantics or generated C quality.",
             "SHA256 integrity is not a signature; trusted hash exchange remains required.",
             "The generated chunker command is planned only and is never executed by self-test.",
+            "No CRCSTORE observation was supplied or inferred; 0x4f4dcf9 remains unproved by this synthetic test.",
         ],
     }
 

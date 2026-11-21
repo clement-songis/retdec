@@ -1143,7 +1143,7 @@ def witness_descriptor(observation):
     }
 
 
-def make_retdec_plan(request, response_path, response_sha256, evidence, *,
+def make_retdec_plan(request, response, response_path, response_sha256, evidence, *,
                      overlay_path=None, overlay_sha256=None, workspace=None):
     workspace = workspace or Path.cwd()
     rvas = ([evidence["siteRva"]] if evidence.get("proofType") == "stack-role"
@@ -1157,13 +1157,19 @@ def make_retdec_plan(request, response_path, response_sha256, evidence, *,
         raise ProofRejected("retdec-range-empty")
     if hi - lo > MAX_RETDEC_SPAN:
         raise ProofRejected("retdec-range-exceeds-16-mib")
+    model = response.get("addressModel") or {}
+    if model.get("key") != "RVA" or "runtimeImageBase" not in model:
+        raise ProofRejected("retdec-runtime-image-base-missing")
+    runtime_base = parse_int(model["runtimeImageBase"])
+    va_lo, va_hi = runtime_base + lo, runtime_base + hi
+    selected_va = f"{va_lo:#x}-{va_hi:#x}"
     constraints = request.get("constraints") or {}
     output_dir = constraints.get("outputDir") or "out/decompiled/retdec"
     chunker = constraints.get("chunker") or "scripts/retdec_pe_chunked.py"
     output = (Path(output_dir) /
               f"unicorn_retdec_{request['siteRva'][2:]}_{request['proofType']}.c")
     command = [
-        "python3", str(chunker), request["image"]["path"], f"{lo:#x}-{hi:#x}",
+        "python3", str(chunker), request["image"]["path"], selected_va,
         output.as_posix(), "--chunk-mb", "1", "--workers", "1",
         "--mem-per-worker-mb", "8000", "--griffin-sidecar",
         path_reference(Path(response_path), workspace), "--fixed-windows",
@@ -1181,6 +1187,7 @@ def make_retdec_plan(request, response_path, response_sha256, evidence, *,
         "observationIds": sorted(item["observationId"] for item in evidence["witnesses"]),
         "captureIds": capture_ids,
         "maxRetdecSpan": MAX_RETDEC_SPAN,
+        "runtimeImageBase": jint(runtime_base),
     }
     if overlay_path is not None:
         manifest["overlaySha256"] = overlay_sha256
@@ -1189,6 +1196,7 @@ def make_retdec_plan(request, response_path, response_sha256, evidence, *,
     return {
         "format": PLAN_FORMAT, "status": "planned-not-executed",
         "requestId": request["requestId"], "selectedRangeRva": f"{lo:#x}-{hi:#x}",
+        "selectedRangeVa": selected_va,
         "image": request["image"],
         "sidecar": {"path": path_reference(Path(response_path), workspace),
                     "sha256": response_sha256},
@@ -1301,7 +1309,7 @@ def _validate_response(request, response_path, response_sha256, witness_sha256, 
         overlay_sha = None
     # Construct the bounded plan before creating an overlay file.  If the plan
     # itself is rejected (for example >16 MiB), no partial artifact remains.
-    plan = make_retdec_plan(request, response_path, actual_response_sha, evidence,
+    plan = make_retdec_plan(request, response, response_path, actual_response_sha, evidence,
                             overlay_path=overlay_path, overlay_sha256=overlay_sha,
                             workspace=workspace)
     if overlay is not None:
@@ -1582,6 +1590,13 @@ def run_self_tests(output_dir=None):
         check(accepted["retdecPlan"]["execution"]["performed"] is False, "no execution")
         check("--fixed-windows" in accepted["retdecPlan"]["command"], "fixed windows")
         check("--griffin-overlay" in accepted["retdecPlan"]["command"], "overlay command")
+        selected_rva = accepted["retdecPlan"]["selectedRangeRva"].split("-")
+        runtime_base = parse_int(response["addressModel"]["runtimeImageBase"])
+        expected_va = "-".join(jint(runtime_base + parse_int(item)) for item in selected_rva)
+        check(accepted["retdecPlan"]["selectedRangeVa"] == expected_va,
+              "RetDec selected range uses runtime image base")
+        check(accepted["retdecPlan"]["command"][3] == expected_va,
+              "RetDec command uses VA, never a bare RVA")
         overlay = load_json(overlay_path)
         check({item["rva"] for item in overlay["entries"]} == {"0x100", "0x2000"},
               "bounded overlay")

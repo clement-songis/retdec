@@ -38,6 +38,13 @@ zero-fill, cross-page accesses without per-page captures, mutable addresses,
 divergent witnesses, incomplete states and invalid proof/hash joins return
 ``unknown``.  The RetDec range and optional overlay include only the store
 instruction site, never the data target.
+
+CFFFIX hardens two boundaries without changing their accepted formats:
+finite-state target sets require their exhaustive pseudo-argument cases, and
+all requested overlays reject contradictory cross-entry bytes while allowing
+identical overlaps.  Diagnostics name the exact shared RVA, entry offsets and
+bytes.  The original 84 self-test assertions are retained and new regression
+assertions are reported separately.
 """
 from __future__ import annotations
 
@@ -473,7 +480,14 @@ def validate_target_set_proof(site, observations, image_sha256):
     if len(observations) != sum(len(matches) for matches in by_target.values()):
         reasons.append("target-set-contains-unclean-or-external-observation")
     cases = site.get("targetCases")
-    if site.get("stateOperand") or cases is not None:
+    # The native provider can reconstruct a finite-state switch only when the
+    # pseudo-argument mapping is present.  A complete domain alone is not
+    # enough: dropping both fields would silently degrade it to an unkeyed
+    # target set.  Jump-table proofs intentionally keep their no-cases rule.
+    if domain.get("kind") == "finite-state" and (
+            site.get("stateOperand") != "pseudo-arg" or not isinstance(cases, list)):
+        reasons.append("target-set-finite-state-cases-missing")
+    if domain.get("kind") == "finite-state" or site.get("stateOperand") or cases is not None:
         if site.get("stateOperand") != "pseudo-arg" or domain.get("kind") != "finite-state":
             reasons.append("target-set-state-operand-or-domain-mismatch")
         elif not isinstance(cases, list) or len(cases) != len(targets):
@@ -1448,6 +1462,25 @@ def _overlay_entry(rva, captures, image_sha):
     }, None
 
 
+def overlay_byte_conflicts(entries):
+    """Return exact cross-entry byte disagreements; equal overlaps are valid."""
+    writes = {}
+    conflicts = []
+    for entry in entries:
+        entry_rva = parse_int(entry["rva"])
+        raw = bytes.fromhex(entry["data"])
+        for offset, byte in enumerate(raw):
+            rva = entry_rva + offset
+            previous = writes.get(rva)
+            current = {"entryRva": jint(entry_rva), "entryOffset": offset,
+                       "byte": f"0x{byte:02x}"}
+            if previous is None:
+                writes[rva] = current
+            elif previous["byte"] != current["byte"]:
+                conflicts.append({"rva": jint(rva), "first": previous, "second": current})
+    return conflicts
+
+
 def bounded_overlay(response, response_sha256, evidence):
     wanted = {evidence["siteRva"], *(evidence.get("targets") or [])}
     if evidence.get("proofType") in {"stack-role", "memory-store-target"}:
@@ -1483,6 +1516,10 @@ def bounded_overlay(response, response_sha256, evidence):
     }
     if omissions:
         raise ProofRejected("bounded-overlay-incomplete", diagnostics=diagnostics)
+    conflicts = overlay_byte_conflicts(entries)
+    if conflicts:
+        diagnostics["byteConflicts"] = conflicts
+        raise ProofRejected("bounded-overlay-overlap-conflict", diagnostics=diagnostics)
     if sum(item["length"] for item in entries) > MAX_OVERLAY_BYTES:
         raise ProofRejected("overlay-byte-limit-exceeded", diagnostics=diagnostics)
     overlay = {
@@ -1546,6 +1583,10 @@ def validate_overlay(payload, image_path, image_sha256):
             raise ProofRejected("overlay-entry-invalid")
     if payload.get("conflicts") or payload.get("invalidCaptures"):
         raise ProofRejected("overlay-conflicts-or-invalid-captures-present")
+    conflicts = overlay_byte_conflicts(payload.get("entries") or [])
+    if conflicts:
+        raise ProofRejected("overlay-overlap-conflict",
+                            diagnostics={"byteConflicts": conflicts})
 
 
 def witness_descriptor(observation):
@@ -2503,6 +2544,135 @@ def run_self_tests(output_dir=None):
         cases.append({"name": "copied-standalone-module-outside-project", "status": "pass",
                       "retdecExecuted": False, "unicornExecuted": False})
 
+        # CFFFIX: keep the original 84 checks intact, then add focused
+        # finite-state and cross-entry overlap regressions.
+        upstream_assertions = checks["count"]
+        check(upstream_assertions == 84, "preserve the original 84 assertions")
+
+        def finite_state_without_cases(item, *, operand=True):
+            site = next(s for s in item["controlFlowSites"] if s["siteRva"] == "0x300")
+            site.pop("targetCases", None)
+            if not operand:
+                site.pop("stateOperand", None)
+        mutated_result("rejected-cfffix-finite-state-missing-targetCases",
+                       finite_state_without_cases, req=set_request,
+                       expected="target-set-finite-state-cases-missing")
+        mutated_result("rejected-cfffix-finite-state-missing-cases-and-operand",
+                       lambda item: finite_state_without_cases(item, operand=False),
+                       req=set_request, expected="target-set-finite-state-cases-missing")
+
+        def finite_state_without_operand(item):
+            site = next(s for s in item["controlFlowSites"] if s["siteRva"] == "0x300")
+            site.pop("stateOperand", None)
+        mutated_result("rejected-cfffix-finite-state-missing-stateOperand",
+                       finite_state_without_operand, req=set_request,
+                       expected="target-set-finite-state-cases-missing")
+
+        def non_exhaustive_cases(item):
+            site = next(s for s in item["controlFlowSites"] if s["siteRva"] == "0x300")
+            site["targetCases"] = site["targetCases"][:1]
+        mutated_result("rejected-cfffix-finite-state-non-exhaustive-cases",
+                       non_exhaustive_cases, req=set_request,
+                       expected="target-set-cases-not-one-per-target")
+
+        def incoherent_case_state(item):
+            site = next(s for s in item["controlFlowSites"] if s["siteRva"] == "0x300")
+            site["targetCases"][0]["stateValue"] = site["targetCases"][1]["stateValue"]
+        mutated_result("rejected-cfffix-finite-state-incoherent-case",
+                       incoherent_case_state, req=set_request,
+                       expected="target-set-case-not-matched-to-observation")
+
+        def jump_table_without_cases(item):
+            site = next(s for s in item["controlFlowSites"] if s["siteRva"] == "0x300")
+            site.pop("targetCases", None)
+            site.pop("stateOperand", None)
+            proof = site["targetSetProof"]
+            proof["kind"] = "complete-jump-table"
+            domain = proof["evidence"]["domain"]
+            domain["kind"] = "jump-table"
+            domain["entries"] = [{"targetRva": entry["targetRva"]}
+                                 for entry in domain["entries"]]
+            proof["evidence"]["table"] = {
+                "baseRva": "0x4000", "entrySize": 4,
+                "boundsProof": "synthetic-cfffix-contract", "entriesDigest": "f" * 64,
+            }
+            proof["proofSha256"] = proof_hash(proof)
+        jump_table_result = mutated_result("accepted-cfffix-jump-table-without-targetCases",
+                                          jump_table_without_cases, req=set_request)
+        check(jump_table_result["status"] == "accepted", "CFFFIX jump-table remains accepted")
+        check(jump_table_result["eligibleEvidence"][0]["targetCases"] is None,
+              "CFFFIX jump-table needs no pseudo-argument cases")
+
+        def direct_overlay_entry(rva, data):
+            raw = bytes.fromhex(data)
+            return {"rva": jint(rva), "length": len(raw), "data": data,
+                    "sha256": sha256_bytes(raw), "mnemonic": "synthetic",
+                    "analysisEligible": True, "captureIds": [], "captureCount": 0,
+                    "imageSha256": response["image"]["sha256"], "provenance": []}
+
+        identical_overlay = copy.deepcopy(overlay)
+        identical_overlay["entries"] = [direct_overlay_entry(0x100, "aabbccdd"),
+                                        direct_overlay_entry(0x102, "ccdd")]
+        validate_overlay(identical_overlay, image_path, response["image"]["sha256"])
+        check(not overlay_byte_conflicts(identical_overlay["entries"]),
+              "CFFFIX validate_overlay accepts identical overlap")
+        cases.append({"name": "accepted-cfffix-identical-overlay-overlap", "status": "pass"})
+
+        conflicting_overlay_payload = copy.deepcopy(identical_overlay)
+        conflicting_overlay_payload["entries"][1] = direct_overlay_entry(0x102, "ccff")
+        try:
+            validate_overlay(conflicting_overlay_payload, image_path,
+                             response["image"]["sha256"])
+            raise AssertionError("CFFFIX validate_overlay missed contradictory overlap")
+        except ProofRejected as exc:
+            check(exc.reasons == ["overlay-overlap-conflict"],
+                  "CFFFIX validate_overlay conflict reason")
+            details = exc.diagnostics["byteConflicts"]
+            check(len(details) == 1, "CFFFIX validate_overlay one exact conflict")
+            detail = details[0]
+            check(detail["rva"] == "0x103", "CFFFIX validate_overlay exact shared RVA")
+            check(detail["first"] == {"entryRva": "0x100", "entryOffset": 3, "byte": "0xdd"},
+                  "CFFFIX validate_overlay first RVA/offset/byte")
+            check(detail["second"] == {"entryRva": "0x102", "entryOffset": 1, "byte": "0xff"},
+                  "CFFFIX validate_overlay second RVA/offset/byte")
+        cases.append({"name": "rejected-cfffix-validate-overlay-byte-conflict", "status": "pass"})
+
+        # Exercise bounded_overlay itself with a one-byte target inside the
+        # two-byte source instruction.  Equal d0/d0 is valid; 90/d0 is not.
+        bounded_evidence = {"siteRva": "0x100", "targets": ["0x101"]}
+        bounded_response = copy.deepcopy(response)
+        bounded_response["instructionCaptures"].append(_test_capture(
+            single, response["image"]["sha256"], rva="0x101", data="d0",
+            run="cfffix-identical-overlap", step=8101, mnemonic="overlap"))
+        bounded_identical, _ = bounded_overlay(
+            bounded_response, response_sha, bounded_evidence)
+        check(not overlay_byte_conflicts(bounded_identical["entries"]),
+              "CFFFIX bounded_overlay accepts identical overlap")
+        validate_overlay(bounded_identical, image_path, response["image"]["sha256"])
+        cases.append({"name": "accepted-cfffix-bounded-identical-overlap", "status": "pass"})
+
+        bounded_response["instructionCaptures"] = [
+            capture for capture in bounded_response["instructionCaptures"]
+            if capture.get("run") != "cfffix-identical-overlap"]
+        bounded_response["instructionCaptures"].append(_test_capture(
+            single, response["image"]["sha256"], rva="0x101", data="90",
+            run="cfffix-conflicting-overlap", step=8102, mnemonic="overlap"))
+        try:
+            bounded_overlay(bounded_response, response_sha, bounded_evidence)
+            raise AssertionError("CFFFIX bounded_overlay missed contradictory overlap")
+        except ProofRejected as exc:
+            check(exc.reasons == ["bounded-overlay-overlap-conflict"],
+                  "CFFFIX bounded_overlay conflict reason")
+            details = exc.diagnostics["byteConflicts"]
+            check(len(details) == 1, "CFFFIX bounded_overlay one exact conflict")
+            detail = details[0]
+            check(detail["rva"] == "0x101", "CFFFIX bounded_overlay exact shared RVA")
+            check(detail["first"] == {"entryRva": "0x100", "entryOffset": 1, "byte": "0xd0"},
+                  "CFFFIX bounded_overlay first RVA/offset/byte")
+            check(detail["second"] == {"entryRva": "0x101", "entryOffset": 0, "byte": "0x90"},
+                  "CFFFIX bounded_overlay second RVA/offset/byte")
+        cases.append({"name": "rejected-cfffix-bounded-overlay-byte-conflict", "status": "pass"})
+
         if output_dir is not None:
             output_dir = Path(output_dir)
             save_json(output_dir / "vgk_agent_STORETARGET_request.json", request)
@@ -2512,7 +2682,11 @@ def run_self_tests(output_dir=None):
 
     return {
         "format": "unicornretdec-portable-selftest-v1", "status": "pass",
-        "assertions": checks["count"], "cases": cases,
+        "assertions": checks["count"],
+        "upstreamAssertions": upstream_assertions,
+        "upstreamAssertionsPreserved": upstream_assertions == 84,
+        "cffFixAssertions": checks["count"] - upstream_assertions,
+        "cases": cases,
         "stdlibOnly": True, "externalFixtures": False,
         "retdecExecuted": False, "unicornExecuted": False, "forkModified": False,
         "coverage": [
@@ -2523,6 +2697,8 @@ def run_self_tests(output_dir=None):
             "mutable store address, different witness, single witness, incomplete proof/pre-state, bad readback",
             "store-specific unknown/zero-fill pages and site-only RetDec range/overlay",
             "copy-as-scripts/unicorn_retdec_orchestrator.py from an unrelated cwd",
+            "CFFFIX finite-state requires exhaustive pseudo-argument targetCases; jump-table unchanged",
+            "CFFFIX bounded/external overlays allow equal overlaps and reject unequal bytes with exact RVA/offset diagnostics",
         ],
         "limitations": [
             "Synthetic fixtures validate orchestration logic, not Unicorn semantics or generated C quality.",

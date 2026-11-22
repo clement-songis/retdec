@@ -616,6 +616,44 @@ class GriffinDecoderTests: public LlvmIrTests
 			EXPECT_EQ(targetFnc, realCall->getCalledFunction());
 		}
 
+		void provedIndirectCallSurvivesResolvePseudoCalls()
+		{
+			parseInput(R"(
+				declare void @__pseudo_call(i64)
+				define i64 @fnc(i64 %opaque) {
+				entry:
+					call void @__pseudo_call(i64 %opaque)
+					ret i64 0
+				}
+				define i64 @target() {
+				entry:
+					ret i64 0
+				}
+			)");
+			prepareV2Decoder();
+			v2Config->getConfig().architecture.setBitSize(64);
+			decoder.initTranslator();
+			JumpTarget::config = v2Config.get();
+			JumpTargets::config = v2Config.get();
+			auto* targetFnc = getFunctionByName("target");
+			decoder._addr2fnc[TraceBase + ProvedTargetRva] = targetFnc;
+			decoder._fnc2addr[targetFnc] = TraceBase + ProvedTargetRva;
+			auto& entry = getFunctionByName("fnc")->getEntryBlock();
+			auto* pseudo = cast<CallInst>(&entry.front());
+			pseudo->setCalledFunction(decoder._c2l->getCallFunction());
+			auto* mapGv = decoder._c2l->getAsm2LlvmMapGlobalVariable();
+			AsmInstruction::setLlvmToAsmGlobalVariable(module.get(), mapGv);
+			IRBuilder<> irb(pseudo);
+			irb.CreateStore(ConstantInt::get(Type::getInt64Ty(context),
+					TraceBase + 0x463ade), mapGv, true);
+			ASSERT_TRUE(decoder.transformToGriffinCall(
+					TraceBase + 0x463ade, pseudo));
+			decoder.resolvePseudoCalls();
+			auto* realCall = dyn_cast<CallInst>(pseudo->getNextNode());
+			ASSERT_NE(nullptr, realCall);
+			EXPECT_EQ(targetFnc, realCall->getCalledFunction());
+		}
+
 		void provedJumpMergesPlaceholderWithoutCall()
 		{
 			parseInput(R"(
@@ -1518,6 +1556,11 @@ TEST_F(GriffinDecoderTests, undecodedTargetIsCreatedOnlyInCurrentFunction)
 TEST_F(GriffinDecoderTests, provedCallBecomesCall)
 {
 	provedCallBecomesCall();
+}
+
+TEST_F(GriffinDecoderTests, provedIndirectCallSurvivesResolvePseudoCalls)
+{
+	provedIndirectCallSurvivesResolvePseudoCalls();
 }
 
 TEST_F(GriffinDecoderTests, rejectedAndScratchControlsLeaveModuleUnchanged)

@@ -2082,6 +2082,20 @@ void Decoder::resolvePseudoCalls()
 		if (_c2l->isCallFunctionCall(pseudo)
 				&& llvm::isa<llvm::CallInst>(real))
 		{
+			// A Griffin dynamic target is proved by the sidecar, not by the
+			// generic static RDA of the original indirect operand. Preserve only
+			// the exact direct call created for that proved target.
+			auto site = AsmInstruction::getInstructionAddress(pseudo);
+			if (_griffin)
+			{
+				auto target = _griffin->getControlTarget(site, "call");
+				auto* realCall = llvm::cast<llvm::CallInst>(real);
+				if (target && realCall->getCalledFunction()
+						== getFunctionAtAddress(*target))
+				{
+					continue;
+				}
+			}
 			Address t = getJumpTarget(
 					AsmInstruction::getInstructionAddress(real),
 					pseudo,

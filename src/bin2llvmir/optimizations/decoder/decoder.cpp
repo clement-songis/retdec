@@ -1036,7 +1036,8 @@ bool Decoder::getJumpTargetsFromInstruction(
 				if (status == GriffinSidecar::ControlStatus::Proven
 						&& transformToGriffinCall(addr, pCall))
 				{
-					return true;
+					// A proved call has normal fall-through; keep decoding nextAddr.
+					return false;
 				}
 				// Rejected or unsafe targets never fall back to a guessed call.
 				return true;

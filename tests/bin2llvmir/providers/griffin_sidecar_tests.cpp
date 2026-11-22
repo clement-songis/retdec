@@ -654,6 +654,72 @@ class GriffinDecoderTests: public LlvmIrTests
 			EXPECT_EQ(targetFnc, realCall->getCalledFunction());
 		}
 
+		void provedConsecutiveCallsContinueFallThrough()
+		{
+			parseInput(R"(
+				declare void @__pseudo_call(i64)
+				define i64 @fnc() {
+				entry:
+					call void @__pseudo_call(i64 0)
+					call void @__pseudo_call(i64 0)
+					ret i64 0
+				}
+				define i64 @target1() {
+				entry:
+					ret i64 1
+				}
+				define i64 @target2() {
+				entry:
+					ret i64 2
+				}
+			)");
+			prepareV2Decoder();
+			auto fixture = std::string(RETDEC_GRIFFIN_V2_TEST_SIDECAR);
+			fixture = fixture.substr(0, fixture.find_last_of('/') + 1)
+					+ "griffin_sidecar_two_calls_test.json";
+			decoder._griffin = std::make_unique<GriffinSidecar>(
+					GriffinSidecar::fromFile(fixture));
+			v2Config->getConfig().architecture.setBitSize(64);
+			decoder.initTranslator();
+			JumpTarget::config = v2Config.get();
+			JumpTargets::config = v2Config.get();
+			auto* target1 = getFunctionByName("target1");
+			auto* target2 = getFunctionByName("target2");
+			decoder._addr2fnc[TraceBase + 0x2000] = target1;
+			decoder._fnc2addr[target1] = TraceBase + 0x2000;
+			decoder._addr2fnc[TraceBase + 0x3000] = target2;
+			decoder._fnc2addr[target2] = TraceBase + 0x3000;
+			auto& entry = getFunctionByName("fnc")->getEntryBlock();
+			auto it = entry.begin();
+			auto* pseudo1 = cast<CallInst>(&*it++);
+			auto* pseudo2 = cast<CallInst>(&*it);
+			pseudo1->setCalledFunction(decoder._c2l->getCallFunction());
+			pseudo2->setCalledFunction(decoder._c2l->getCallFunction());
+
+			capstone2llvmir::Capstone2LlvmIrTranslator::TranslationResultOne tr1;
+			tr1.branchCall = pseudo1;
+			tr1.size = 4;
+			std::size_t rangeSize = 12;
+			EXPECT_FALSE(decoder.getJumpTargetsFromInstruction(
+					TraceBase + 0x1000, tr1, rangeSize));
+			capstone2llvmir::Capstone2LlvmIrTranslator::TranslationResultOne tr2;
+			tr2.branchCall = pseudo2;
+			tr2.size = 4;
+			EXPECT_FALSE(decoder.getJumpTargetsFromInstruction(
+					TraceBase + 0x1004, tr2, rangeSize));
+
+			auto directCalls = [&entry](llvm::Function* target) {
+				return std::count_if(entry.begin(), entry.end(),
+						[target](const llvm::Instruction& insn) {
+							auto* call = llvm::dyn_cast<llvm::CallInst>(&insn);
+							return call && call->getCalledFunction() == target;
+						});
+			};
+			EXPECT_EQ(1, directCalls(target1));
+			EXPECT_EQ(1, directCalls(target2));
+			EXPECT_EQ(2, decoder._jumpTargets.size());
+		}
+
 		void provedJumpMergesPlaceholderWithoutCall()
 		{
 			parseInput(R"(
@@ -1561,6 +1627,11 @@ TEST_F(GriffinDecoderTests, provedCallBecomesCall)
 TEST_F(GriffinDecoderTests, provedIndirectCallSurvivesResolvePseudoCalls)
 {
 	provedIndirectCallSurvivesResolvePseudoCalls();
+}
+
+TEST_F(GriffinDecoderTests, provedConsecutiveCallsContinueFallThrough)
+{
+	provedConsecutiveCallsContinueFallThrough();
 }
 
 TEST_F(GriffinDecoderTests, rejectedAndScratchControlsLeaveModuleUnchanged)
